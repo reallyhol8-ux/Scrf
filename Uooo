@@ -1,0 +1,3014 @@
+-- ห้ามก๊อปของกู อยากได้ก็ทำเอง
+
+-- Token Hub UI
+-- ใส่เป็น LocalScript ใน StarterPlayer > StarterPlayerScripts (รันครั้งเดียว ไม่รีเซ็ตตอนตาย)
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+-- ตั้งค่า
+local WIN_SIZE = Vector2.new(580, 360)
+local PILL_SIZE = Vector2.new(124, 40)
+local HEADER = 64
+local COIN = 32 -- ต้องคูณ 16 ไม่งั้นพิกเซลแตก
+local KEY = Enum.KeyCode.T -- กดเปิด/ปิด
+local FONT = Enum.Font.Arcade
+
+-- รอบวัน (วินาที)
+local DAY_SEC = 30
+local NIGHT_SEC = 30
+local CYCLE = DAY_SEC + NIGHT_SEC
+local TWILIGHT = 2 -- ครึ่งหนึ่งของช่วงฟ้าเปลี่ยนสี
+local CLOUD_SPEED = 3.5 -- ตัวคูณความเร็วเมฆ (เพิ่ม = เร็วขึ้น)
+
+local C = {
+	neon = "#b026ff",
+	neon2 = "#d266ff",
+	sky1 = "#81c2ec",
+	sky2 = "#a8d8ef",
+	grass = "#579a3d",
+	grass2 = "#76b365",
+	dirt = "#6b4423",
+	dirt2 = "#614d1b",
+	pill = "#3b2512",
+	yellow = "#fcd000",
+	yellow2 = "#8a6d00",
+}
+
+local tPop = TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local tMove = TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local tFade = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local tOut = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+
+local function col(h)
+	return Color3.fromHex(h)
+end
+
+local function make(class, props, parent)
+	local obj = Instance.new(class)
+	for k, v in props do
+		obj[k] = v
+	end
+	obj.Parent = parent
+	return obj
+end
+
+-- วาดพิกเซลจากลิสต์สี่เหลี่ยม {x, y, w, h}
+-- ถ้าใส่ list มาด้วย จะเก็บทุกชิ้น + สีเดิมไว้ (เอาไว้ปรับสีตอนกลางคืน)
+local function drawPixels(parent, gw, gh, layers, list)
+	local f = make("Frame", {
+		Name = "Pixels",
+		BackgroundTransparency = 1,
+		Size = UDim2.fromScale(1, 1),
+	}, parent)
+
+	for i, layer in layers do
+		for _, r in layer.rects do
+			local piece = make("Frame", {
+				BackgroundColor3 = col(layer.color),
+				BorderSizePixel = 0,
+				Position = UDim2.fromScale(r[1] / gw, r[2] / gh),
+				Size = UDim2.fromScale(r[3] / gw, r[4] / gh),
+				ZIndex = i,
+			}, f)
+			if list then
+				table.insert(list, { f = piece, base = piece.BackgroundColor3 })
+			end
+		end
+	end
+
+	return f
+end
+
+local function box(parent, name, w, h, anchor, pos, z)
+	return make("Frame", {
+		Name = name,
+		BackgroundTransparency = 1,
+		AnchorPoint = anchor,
+		Position = pos,
+		Size = UDim2.fromOffset(w, h),
+		ZIndex = z,
+	}, parent)
+end
+
+-- ขอบนูน: ขอบบน/ซ้ายสว่าง ขอบล่าง/ขวามืด
+local function bevel(parent, lightSize, darkSize, light, dark, lightTrans, darkTrans)
+	local function strip(name, color, trans, pos, size)
+		make("Frame", {
+			Name = name,
+			BackgroundColor3 = col(color),
+			BackgroundTransparency = trans,
+			BorderSizePixel = 0,
+			Position = pos,
+			Size = size,
+			ZIndex = 40,
+		}, parent)
+	end
+	strip("BevelTop", light, lightTrans, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, lightSize))
+	strip("BevelLeft", light, lightTrans, UDim2.fromOffset(0, 0), UDim2.new(0, lightSize, 1, 0))
+	strip("BevelBottom", dark, darkTrans, UDim2.new(0, 0, 1, -darkSize), UDim2.new(1, 0, 0, darkSize))
+	strip("BevelRight", dark, darkTrans, UDim2.new(1, -darkSize, 0, 0), UDim2.new(0, darkSize, 1, 0))
+end
+
+local function makeBtn(parent, name, text, fill, light, dark, border, x)
+	local base = col(fill)
+	local hover = base:Lerp(Color3.new(1, 1, 1), 0.2)
+
+	local b = make("TextButton", {
+		Name = name,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, x, 0, 6),
+		Size = UDim2.fromOffset(24, 20),
+		BackgroundColor3 = base,
+		AutoButtonColor = false,
+		BorderSizePixel = 0,
+		Text = text,
+		Font = FONT,
+		TextSize = 16,
+		TextColor3 = Color3.new(1, 1, 1),
+		ZIndex = 30,
+	}, parent)
+
+	make("UIStroke", {
+		Color = col(border),
+		Thickness = 2,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, b)
+	bevel(b, 2, 2, light, dark, 0, 0)
+
+	b.MouseEnter:Connect(function()
+		TweenService:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = hover }):Play()
+	end)
+	b.MouseLeave:Connect(function()
+		TweenService:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = base }):Play()
+	end)
+
+	return b
+end
+
+-- ปรับสีทั้งลิสต์ให้เข้าหาสี target
+local function tint(list, target, amount)
+	for _, item in list do
+		item.f.BackgroundColor3 = item.base:Lerp(target, amount)
+	end
+end
+
+-- ข้อมูลพิกเซลอาร์ต
+local sunArt = {
+	{
+		color = "#ffd54a",
+		rects = {
+			{ 6, 0, 4, 1 }, { 4, 1, 8, 1 }, { 2, 2, 12, 1 }, { 1, 3, 14, 1 }, { 1, 4, 14, 1 },
+			{ 0, 5, 16, 5 }, { 1, 10, 14, 1 }, { 1, 11, 14, 1 }, { 2, 12, 12, 1 }, { 4, 13, 8, 1 }, { 6, 14, 4, 1 },
+		},
+	},
+	{ color = "#ffeb3b", rects = { { 5, 2, 4, 2 }, { 4, 4, 3, 2 } } },
+}
+
+local moonArt = {
+	{
+		color = "#e8ecf5",
+		rects = {
+			{ 4, 0, 6, 1 }, { 2, 1, 10, 1 }, { 1, 2, 12, 2 }, { 0, 4, 14, 6 },
+			{ 1, 10, 12, 2 }, { 2, 12, 10, 1 }, { 4, 13, 6, 1 },
+		},
+	},
+	{ color = "#c9d0e4", rects = { { 12, 2, 1, 2 }, { 12, 4, 2, 6 }, { 12, 10, 1, 2 }, { 11, 12, 1, 1 } } },
+	{ color = "#b4bdd6", rects = { { 3, 3, 2, 2 }, { 8, 6, 2, 2 }, { 4, 8, 1, 1 }, { 9, 3, 1, 1 }, { 6, 10, 2, 1 } } },
+	{ color = "#ffffff", rects = { { 3, 1, 2, 1 }, { 2, 2, 1, 1 } } },
+}
+
+local bigCloudArt = {
+	{ color = "#ffffff", rects = { { 6, 0, 6, 1 }, { 3, 1, 12, 1 }, { 1, 2, 17, 1 }, { 0, 3, 20, 3 } } },
+	{ color = "#e8e8e8", rects = { { 0, 6, 20, 1 } } },
+}
+
+local smallCloudArt = {
+	{ color = "#ffffff", rects = { { 3, 0, 5, 1 }, { 1, 1, 10, 1 }, { 0, 2, 12, 2 } } },
+}
+
+local coinEdge = {
+	color = "#b8860b",
+	rects = {
+		{ 5, 0, 6, 1 }, { 3, 1, 10, 1 }, { 2, 2, 12, 1 }, { 1, 3, 14, 1 }, { 0, 4, 16, 8 },
+		{ 1, 12, 14, 1 }, { 2, 13, 12, 1 }, { 3, 14, 10, 1 }, { 5, 15, 6, 1 },
+	},
+}
+local coinGold = {
+	color = "#ffd54a",
+	rects = {
+		{ 5, 1, 6, 1 }, { 4, 2, 8, 1 }, { 2, 3, 12, 1 }, { 1, 4, 14, 8 },
+		{ 2, 12, 12, 1 }, { 4, 13, 8, 1 }, { 5, 14, 6, 1 },
+	},
+}
+
+-- หน้าเหรียญมีตัว T
+local coinFrontArt = {
+	coinEdge,
+	coinGold,
+	{ color = "#ffeb3b", rects = { { 4, 3, 3, 1 }, { 3, 4, 2, 2 }, { 4, 6, 1, 1 } } },
+	{ color = "#e6a817", rects = { { 11, 9, 3, 2 }, { 10, 11, 4, 1 }, { 9, 12, 3, 1 } } },
+	{ color = "#b8860b", rects = { { 5, 5, 6, 1 }, { 7, 6, 2, 5 } } },
+	{ color = "#ffffff", rects = { { 4, 4, 1, 1 } } },
+}
+
+local coinBackArt = {
+	coinEdge,
+	coinGold,
+	{
+		color = "#b8860b",
+		rects = {
+			{ 7, 7, 2, 2 }, { 5, 5, 1, 1 }, { 10, 5, 1, 1 }, { 5, 10, 1, 1 }, { 10, 10, 1, 1 },
+			{ 7, 4, 2, 1 }, { 7, 11, 2, 1 }, { 4, 7, 1, 2 }, { 11, 7, 1, 2 },
+		},
+	},
+	{ color = "#ffeb3b", rects = { { 4, 3, 2, 1 }, { 3, 4, 1, 1 } } },
+}
+
+-- เหรียญทั้งหมดหมุนพร้อมกัน เก็บไว้ในลิสต์
+local coins = {}
+
+local function makeCoin(parent, owner, pos, z)
+	local f = box(parent, "Coin", COIN, COIN, Vector2.new(0.5, 0.5), pos, z)
+	local spin = box(f, "Spin", COIN, COIN, Vector2.new(0.5, 0.5), UDim2.fromScale(0.5, 0.5), 1)
+	local front = drawPixels(spin, 16, 16, coinFrontArt)
+	local back = drawPixels(spin, 16, 16, coinBackArt)
+	front.Name = "Front"
+	back.Name = "Back"
+	table.insert(coins, { spin = spin, front = front, back = back, owner = owner })
+	return f
+end
+
+-- สร้าง gui
+local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+
+local oldGui = playerGui:FindFirstChild("TokenHub")
+if oldGui then
+	oldGui:Destroy()
+end
+
+local gui = make("ScreenGui", {
+	Name = "TokenHub",
+	ResetOnSpawn = false,
+	IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, playerGui)
+
+-- มุมซ้ายบนของ UI (หน้าต่างกับแคปซูลใช้ตำแหน่งเดียวกัน)
+local uiPos = Vector2.zero
+
+-- สถานะที่ล็อกปุ่มอื่นไว้ (กำลัง intro / เปิด popup / กำลังลบ UI)
+local introBusy, confirmOpen, removing = false, false, false
+local function blocked()
+	return introBusy or confirmOpen or removing
+end
+
+-- เก็บ connection ไว้ตัดทิ้งตอนลบ UI
+local conns = {}
+
+-- ขอบ RGB: UIGradient สีรุ้งบน UIStroke แล้วหมุนในลูปหลัก
+local RAINBOW = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 0)),
+	ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 200, 0)),
+	ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 255, 70)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 220, 255)),
+	ColorSequenceKeypoint.new(0.67, Color3.fromRGB(60, 80, 255)),
+	ColorSequenceKeypoint.new(0.83, Color3.fromRGB(255, 0, 220)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0)),
+})
+local rainbows = {}
+local function rainbow(stroke)
+	local g = make("UIGradient", { Color = RAINBOW }, stroke)
+	table.insert(rainbows, g)
+	return g
+end
+
+-- ตัวเรียกตอนหน้าต่างขยับ (กล่องถามตอนกด X ใช้ตามหน้าต่าง)
+local onUiMoved = nil
+
+-- หน้าต่าง / แคปซูล ใช้ตัวสร้างเดียวกัน
+-- holder = กรอบนอก (ตำแหน่ง ขอบ scale) / canvas = ตัวเฟดทั้งก้อน
+local function makePanel(name, size, radius, strokeColor)
+	local holder = make("Frame", {
+		Name = name,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(size.X, size.Y),
+		BackgroundTransparency = 1,
+		Visible = false,
+	}, gui)
+	local holderCorner = make("UICorner", { CornerRadius = radius }, holder)
+
+	local stroke = make("UIStroke", {
+		Color = strokeColor,
+		Thickness = 2,
+		Transparency = 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, holder)
+
+	local scale = make("UIScale", { Scale = 0.8 }, holder)
+
+	local canvas = make("CanvasGroup", {
+		Name = "Canvas",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = col(C.dirt),
+		BorderSizePixel = 0,
+		GroupTransparency = 1,
+	}, holder)
+	local canvasCorner = make("UICorner", { CornerRadius = radius }, canvas)
+
+	local p = {
+		holder = holder,
+		canvas = canvas,
+		stroke = stroke,
+		scale = scale,
+		size = size,
+		token = 0,
+		corners = { holderCorner, canvasCorner },
+	}
+
+	function p:center()
+		return uiPos + self.size / 2
+	end
+
+	function p:target()
+		local c = self:center()
+		return UDim2.fromOffset(c.X, c.Y)
+	end
+
+	function p:place()
+		self.holder.Position = self:target()
+	end
+
+	-- from = จุดที่ให้เด้งออกมา (ไม่ใส่ก็ได้)
+	function p:show(from)
+		self.token += 1
+		local h = self.holder
+
+		if not h.Visible then
+			self.canvas.GroupTransparency = 1
+			self.stroke.Transparency = 1
+			self.scale.Scale = from and 0.3 or 0.8
+			if from then
+				h.Position = UDim2.fromOffset(from.X, from.Y)
+			else
+				self:place()
+			end
+			h.Visible = true
+		end
+
+		TweenService:Create(self.scale, tPop, { Scale = 1 }):Play()
+		TweenService:Create(h, tMove, { Position = self:target() }):Play()
+		TweenService:Create(self.canvas, tFade, { GroupTransparency = 0 }):Play()
+		TweenService:Create(self.stroke, tFade, { Transparency = 0 }):Play()
+	end
+
+	-- to = จุดที่ให้หดเข้าไป (ไม่ใส่ก็ได้)
+	function p:hide(to)
+		self.token += 1
+		local mine = self.token
+		local h = self.holder
+
+		TweenService:Create(self.scale, tOut, { Scale = to and 0.3 or 0.85 }):Play()
+		TweenService:Create(self.canvas, tOut, { GroupTransparency = 1 }):Play()
+		TweenService:Create(self.stroke, tOut, { Transparency = 1 }):Play()
+
+		local goal = to and UDim2.fromOffset(to.X, to.Y) or self:target()
+		local mv = TweenService:Create(h, tOut, { Position = goal })
+		mv.Completed:Connect(function()
+			if self.token == mine then
+				h.Visible = false
+			end
+		end)
+		mv:Play()
+	end
+
+	return p
+end
+
+local win = makePanel("Window", WIN_SIZE, UDim.new(0, 8), Color3.new(1, 1, 1))
+rainbow(win.stroke)
+local pill = makePanel("Pill", PILL_SIZE, UDim.new(1, 0), col(C.yellow))
+pill.canvas.BackgroundColor3 = col(C.pill)
+
+-- ขอบ RGB หนาขึ้น/บางลง (สีหมุนอยู่ในลูปหลัก)
+TweenService:Create(
+	win.stroke,
+	TweenInfo.new(1.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+	{ Thickness = 3 }
+):Play()
+
+-- ===== หน้าต่าง =====
+local wc = win.canvas
+local W = WIN_SIZE.X
+
+local header = make("Frame", {
+	Name = "Header",
+	Size = UDim2.new(1, 0, 0, HEADER),
+	BackgroundColor3 = Color3.new(1, 1, 1),
+	BorderSizePixel = 0,
+	ClipsDescendants = true,
+}, wc)
+local sky = make("UIGradient", {
+	Rotation = 90,
+	Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, col(C.sky1)),
+		ColorSequenceKeypoint.new(0.7, col(C.sky2)),
+		ColorSequenceKeypoint.new(1, col(C.sky2)),
+	}),
+}, header)
+
+-- ดาว (โผล่ตอนกลางคืน)
+local stars = {}
+local rng = Random.new(11)
+for i = 1, 16 do
+	local s = rng:NextInteger(2, 3)
+	stars[i] = make("Frame", {
+		Name = "Star",
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(rng:NextInteger(4, W - 8), rng:NextInteger(3, 34)),
+		Size = UDim2.fromOffset(s, s),
+		ZIndex = 1,
+	}, header)
+end
+
+-- พระอาทิตย์ / ดวงจันทร์ (ขยับตามเวลาในลูปด้านล่าง)
+local SUN_W, MOON_W = 32, 28
+local sun = box(header, "Sun", SUN_W, 30, Vector2.zero, UDim2.fromOffset(-40, 46), 2)
+drawPixels(sun, 16, 15, sunArt)
+
+local moon = box(header, "Moon", MOON_W, 28, Vector2.zero, UDim2.fromOffset(-40, 46), 2)
+drawPixels(moon, 14, 14, moonArt)
+moon.Visible = false
+
+-- เมฆ 3 ก้อน ขนาด/ความเร็วไม่เท่ากัน (ไกล = เล็ก ช้า)
+-- หญ้าเริ่มที่ y = 52 เลยต้องให้ y + สูง ไม่เกิน ~46 เมฆจะได้ไม่จมพื้น
+local cloudDefs = {
+	{ art = bigCloudArt, gw = 20, gh = 7, px = 2, y = 8, speed = 4, x0 = 300 }, -- 40x14 ล่างสุด y=22
+	{ art = smallCloudArt, gw = 12, gh = 4, px = 4, y = 4, speed = 6, x0 = 100 }, -- 48x16 ล่างสุด y=20
+	{ art = bigCloudArt, gw = 20, gh = 7, px = 3, y = 22, speed = 9, x0 = 220 }, -- 60x21 ล่างสุด y=43
+}
+local clouds = {}
+for i, d in cloudDefs do
+	local w, h = d.gw * d.px, d.gh * d.px
+	local f = box(header, "Cloud" .. i, w, h, Vector2.zero, UDim2.fromOffset(0, d.y), 3)
+	local pieces = {}
+	drawPixels(f, d.gw, d.gh, d.art, pieces)
+	table.insert(clouds, { frame = f, w = w, y = d.y, speed = d.speed * CLOUD_SPEED, x0 = d.x0, pieces = pieces })
+end
+
+-- หญ้า
+local grass = make("Frame", {
+	Name = "Grass",
+	Position = UDim2.new(0, 0, 1, -12),
+	Size = UDim2.new(1, 0, 0, 12),
+	BackgroundTransparency = 1,
+	ZIndex = 4,
+}, header)
+local grassPieces = {}
+local function grassBlock(color, pos, size)
+	local f = make("Frame", {
+		BackgroundColor3 = col(color),
+		BorderSizePixel = 0,
+		Position = pos,
+		Size = size,
+	}, grass)
+	table.insert(grassPieces, { f = f, base = f.BackgroundColor3 })
+	return f
+end
+grassBlock(C.grass2, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 2))
+grassBlock(C.grass, UDim2.fromOffset(0, 2), UDim2.new(1, 0, 0, 3))
+make("Frame", {
+	BackgroundColor3 = col(C.dirt), BorderSizePixel = 0,
+	Position = UDim2.fromOffset(0, 5), Size = UDim2.new(1, 0, 0, 7),
+}, grass)
+-- ก้อนเล็ก ๆ ให้หญ้าดูมีลาย
+local rng2 = Random.new(5)
+for x = 0, W, 6 do
+	if rng2:NextNumber() < 0.55 then
+		grassBlock("#86c773", UDim2.fromOffset(x, 0), UDim2.fromOffset(3, 2))
+	end
+	if rng2:NextNumber() < 0.5 then
+		grassBlock("#46802f", UDim2.fromOffset(x + 2, 2), UDim2.fromOffset(3, 3))
+	end
+end
+
+-- กล่องไอคอนเหรียญ (ขอบนูน)
+local iconBox = make("Frame", {
+	Name = "IconBox",
+	Position = UDim2.fromOffset(8, 6),
+	Size = UDim2.fromOffset(40, 40),
+	BackgroundColor3 = col("#46301a"),
+	BorderSizePixel = 0,
+	ZIndex = 8,
+}, header)
+make("UIStroke", {
+	Color = col("#1b1208"),
+	Thickness = 2,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, iconBox)
+bevel(iconBox, 2, 2, "#d8d1c0", "#6a5a44", 0, 0)
+local iconPop = make("UIScale", { Scale = 1 }, iconBox)
+local iconCoin = makeCoin(iconBox, win.holder, UDim2.fromScale(0.5, 0.5), 1)
+local coinPop = make("UIScale", { Scale = 1 }, iconCoin)
+
+-- ชื่อ 3 มิติ: ซ้อนหลายชั้นเยื้องกันให้เป็นขอบหนา + เงาดำ
+local titleLabels = {}
+local function titleLayer(name, color, off, z, trans)
+	local label = make("TextLabel", {
+		Name = name,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 58 + off, 0, 26 + off),
+		Size = UDim2.fromOffset(170, 24),
+		BackgroundTransparency = 1,
+		Text = "TOKEN HUB",
+		Font = FONT,
+		TextSize = 22,
+		TextColor3 = color,
+		TextTransparency = trans or 0,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = z,
+	}, header)
+	table.insert(titleLabels, label)
+	return label
+end
+titleLayer("Shadow", Color3.new(0, 0, 0), 5, 10, 0.65)
+titleLayer("Side3", col("#5c4900"), 3, 11)
+titleLayer("Side2", col(C.yellow2), 2, 12)
+titleLayer("Side1", col("#b38f00"), 1, 13)
+local mainTitle = titleLayer("Title", col(C.yellow), 0, 14)
+make("UIStroke", {
+	Color = col("#3b2a00"),
+	Thickness = 1,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
+}, mainTitle)
+
+-- ปุ่มโปร่งใสไว้ลากหน้าต่าง
+local dragHeader = make("TextButton", {
+	Name = "Drag",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	Text = "",
+	AutoButtonColor = false,
+	ZIndex = 20,
+}, header)
+
+local minBtn = makeBtn(header, "Min", "-", "#8a8a8a", "#c8c8c8", "#4a4a4a", "#222222", -34)
+local closeBtn = makeBtn(header, "Close", "X", "#c62828", "#f27878", "#7a1010", "#3d0808", -6)
+local minPop = make("UIScale", { Scale = 1 }, minBtn)
+local closePop = make("UIScale", { Scale = 1 }, closeBtn)
+
+-- ม่านสีดินปิดท้องฟ้าตอน intro แล้วค่อยจางออก (ปกติโปร่งใส)
+local introCover = make("Frame", {
+	Name = "IntroCover",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = col(C.dirt),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ZIndex = 6,
+}, header)
+
+-- ส่วนพื้นดินด้านล่าง
+local body = make("Frame", {
+	Name = "Body",
+	BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(0, HEADER),
+	Size = UDim2.new(1, 0, 1, -HEADER),
+}, wc)
+
+make("Frame", {
+	Name = "Line",
+	BackgroundColor3 = col(C.dirt2),
+	BorderSizePixel = 0,
+	Size = UDim2.new(1, 0, 0, 3),
+}, body)
+
+-- ม่านสีดินปิดเนื้อหาตอน intro (ปกติโปร่งใส)
+local bodyCover = make("Frame", {
+	Name = "IntroCover",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = col(C.dirt),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ZIndex = 50,
+}, body)
+
+-- เอาของไปใส่ใน Content ตรงนี้
+local content = make("Frame", {
+	Name = "Content",
+	BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(0, 3),
+	Size = UDim2.new(1, 0, 1, -3),
+}, body)
+make("UIPadding", {
+	PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+	PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8),
+}, content)
+
+
+-- ===================== ADMIN PANEL (6 หมวด / 21 ฟีเจอร์) =====================
+-- ซ้าย = หมวดหมู่ / ขวา = สคริปต์ในหมวดนั้น
+local function buildAdmin()
+	local lp = Players.LocalPlayer
+	local Lit = game:GetService("Lighting")
+	local TeleportService = game:GetService("TeleportService")
+	local HttpService = game:GetService("HttpService")
+	local Workspace = workspace
+	local WHITE = Color3.new(1, 1, 1)
+	local BOLD = Enum.Font.GothamBold
+	local MED = Enum.Font.GothamMedium
+
+	-- ---------- ตั้งค่า ----------
+	local S = { fly = 50, speed = 50, hitbox = 5, pull = 5, bright = 5 }
+	local AIM_RANGE = 600 -- ระยะล็อกเป้า (studs)
+	local PULL_RANGE = 300 -- ระยะที่แรงดูดทำงาน
+	local INVIS_OFFSET = Vector3.new(0, 50000, 0) -- หายตัว = พาตัวไปไกลขนาดนี้
+	local EXTERNAL = {
+		music = { name = "เปิดเพลงคนอื่นไม่ได้ยิน", id = "1465108175034" },
+		steal = { name = "ดูดเพลง", id = "8011267776024" },
+	}
+
+	local mine = {} -- connection ของส่วนนี้ (ไว้ตัดตอนลบ UI)
+	local function track(c)
+		mine[#mine + 1] = c
+		return c
+	end
+
+	local active, feats, ui = {}, {}, {}
+	local setFeature
+	local notify
+
+	-- ---------- ตัวช่วย ----------
+	local function getCam()
+		return Workspace.CurrentCamera
+	end
+	local function getHum()
+		local c = lp.Character
+		return c and c:FindFirstChildOfClass("Humanoid")
+	end
+	local function getRoot()
+		local c = lp.Character
+		return c and c:FindFirstChild("HumanoidRootPart")
+	end
+	local function noChar()
+		notify("ตัวละครยังไม่พร้อม")
+		return false
+	end
+
+	-- ตัวควบคุมของเกม (ใช้กับปุ่ม/จอยบนมือถือ)
+	local controls = nil
+	task.spawn(function()
+		pcall(function()
+			local pm = require(lp:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 10))
+			controls = pm:GetControls()
+		end)
+	end)
+
+	-- ทิศที่ผู้เล่นกดเดิน (อิงกล้อง ลอยขึ้น/ลงตามมุมกล้อง) + Space ขึ้น / Ctrl,Q ลง
+	local function moveVector(c, h)
+		local look, right = c.CFrame.LookVector, c.CFrame.RightVector
+		local dir = nil
+		if controls then
+			local ok, mv = pcall(controls.GetMoveVector, controls)
+			if ok and mv then
+				dir = look * -mv.Z + right * mv.X
+			end
+		end
+		if not dir then
+			dir = Vector3.zero
+			local md = h.MoveDirection
+			if md.Magnitude > 0.01 then
+				local fl = Vector3.new(look.X, 0, look.Z)
+				local fr = Vector3.new(right.X, 0, right.Z)
+				local f = fl.Magnitude > 0.01 and md:Dot(fl.Unit) or 0
+				local s = fr.Magnitude > 0.01 and md:Dot(fr.Unit) or 0
+				dir = look * f + (fr.Magnitude > 0.01 and fr.Unit or Vector3.zero) * s
+			end
+		end
+		if not UIS:GetFocusedTextBox() then
+			if UIS:IsKeyDown(Enum.KeyCode.Space) then
+				dir += Vector3.yAxis
+			end
+			if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.Q) then
+				dir -= Vector3.yAxis
+			end
+		end
+		if dir.Magnitude > 1 then
+			dir = dir.Unit
+		end
+		return dir
+	end
+
+	-- ตัวติดตามบอท (Humanoid ที่ไม่ใช่ผู้เล่น)
+	local bots = {}
+	local function trackBot(d)
+		if d:IsA("Humanoid") and d.Parent and not Players:GetPlayerFromCharacter(d.Parent) then
+			bots[d] = true
+		end
+	end
+	track(Workspace.DescendantAdded:Connect(trackBot))
+	track(Workspace.DescendantRemoving:Connect(function(d)
+		if bots[d] then
+			bots[d] = nil
+		end
+	end))
+	task.spawn(function()
+		local n = 0
+		for _, d in Workspace:GetDescendants() do
+			trackBot(d)
+			n += 1
+			if n % 500 == 0 then
+				task.wait()
+			end
+		end
+	end)
+
+	-- =====================================================================
+	-- 1) บิน
+	-- =====================================================================
+	local fly = {}
+	local function flyStop()
+		if fly.bv then
+			fly.bv:Destroy()
+			fly.bv = nil
+		end
+		if fly.bg then
+			fly.bg:Destroy()
+			fly.bg = nil
+		end
+		local h = getHum()
+		if h then
+			h.PlatformStand = false
+		end
+	end
+	local function flyStart()
+		flyStop()
+		local r, h = getRoot(), getHum()
+		if not (r and h) then
+			return false
+		end
+		local bv = Instance.new("BodyVelocity")
+		bv.MaxForce = Vector3.one * 1e9
+		bv.Velocity = Vector3.zero
+		bv.Parent = r
+		local bg = Instance.new("BodyGyro")
+		bg.MaxTorque = Vector3.one * 1e9
+		bg.P = 1e4
+		bg.CFrame = r.CFrame
+		bg.Parent = r
+		fly.bv, fly.bg = bv, bg
+		h.PlatformStand = true
+		return true
+	end
+	local function flyUpdate(c, h)
+		local r = getRoot()
+		if not r then
+			return
+		end
+		if not fly.bv or fly.bv.Parent ~= r then
+			if not flyStart() then
+				return
+			end
+		end
+		fly.bv.Velocity = moveVector(c, h) * S.fly
+		local look = c.CFrame.LookVector
+		local flat = Vector3.new(look.X, 0, look.Z)
+		if flat.Magnitude > 0.05 then
+			fly.bg.CFrame = CFrame.lookAt(r.Position, r.Position + flat)
+		end
+	end
+
+	-- =====================================================================
+	-- 2) ความเร็ววิ่ง   4) เดินทะลุ   5) วาปด้วยไอเทม
+	-- =====================================================================
+	local spd = {}
+	local ncSaved = {}
+	local function noclipStep()
+		local c = lp.Character
+		if not c then
+			return
+		end
+		for _, p in c:GetDescendants() do
+			if p:IsA("BasePart") and p.CanCollide then
+				ncSaved[p] = true
+				p.CanCollide = false
+			end
+		end
+	end
+	local function noclipRestore()
+		for p in ncSaved do
+			if p.Parent then
+				p.CanCollide = true
+			end
+		end
+		table.clear(ncSaved)
+	end
+
+	local tpTool = nil
+	local function giveTpTool()
+		if tpTool and tpTool.Parent then
+			return
+		end
+		local bp = lp:FindFirstChildOfClass("Backpack")
+		if not bp then
+			return
+		end
+		local t = Instance.new("Tool")
+		t.Name = "วาป"
+		t.ToolTip = "คลิก/แตะที่พื้นเพื่อวาปไปจุดนั้น"
+		t.RequiresHandle = false
+		t.CanBeDropped = false
+		t.Activated:Connect(function()
+			local r = getRoot()
+			local hit = lp:GetMouse().Hit
+			if r and hit then
+				r.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3.5, 0)) * r.CFrame.Rotation
+				r.AssemblyLinearVelocity = Vector3.zero
+			end
+		end)
+		t.Parent = bp
+		tpTool = t
+	end
+
+	-- =====================================================================
+	-- 8) มองผู้เล่นอื่น
+	-- =====================================================================
+	local spec = { target = nil, label = nil }
+	local function specCandidates()
+		local l = {}
+		for _, p in Players:GetPlayers() do
+			if p ~= lp then
+				table.insert(l, p)
+			end
+		end
+		table.sort(l, function(a, b)
+			return a.Name:lower() < b.Name:lower()
+		end)
+		return l
+	end
+	local function specLabelUpdate()
+		if spec.label then
+			spec.label.Text = spec.target and spec.target.DisplayName or "— ไม่มี —"
+		end
+	end
+	local function specShift(d)
+		local l = specCandidates()
+		if #l == 0 then
+			spec.target = nil
+			specLabelUpdate()
+			if active.spectate then
+				setFeature("spectate", false)
+			end
+			return
+		end
+		local i = table.find(l, spec.target) or 0
+		spec.target = l[((i - 1 + d) % #l) + 1]
+		specLabelUpdate()
+	end
+	local function specEnforce(c)
+		local t = spec.target
+		local th = t and t.Character and t.Character:FindFirstChildOfClass("Humanoid")
+		if th and c.CameraSubject ~= th then
+			c.CameraSubject = th
+		end
+	end
+
+	-- =====================================================================
+	-- 6) หายตัว (พาตัวไปไกลมาก กล้องยังอยู่ในแมพ)   10) ถอดจิต (กล้องอิสระ ตัวยืนอยู่ที่เดิม)
+	-- ทั้งคู่ใช้ "จุดกล้อง" (ghost) ตัวเดียวกัน เปิดพร้อมกันได้
+	-- =====================================================================
+	local ghost = { part = nil, modes = {}, home = nil, token = 0, skip = false }
+
+	-- พาตัวไปไกล แล้วรอให้ตำแหน่งส่งถึงคนอื่นก่อนค่อยล็อกไม่ให้ตก
+	local function ghostBodyFar(r)
+		r.Anchored = false
+		r.CFrame = CFrame.new(ghost.home.Position + INVIS_OFFSET)
+		r.AssemblyLinearVelocity = Vector3.zero
+		ghost.token += 1
+		local my, d = ghost.token, ghost.part
+		task.delay(0.3, function()
+			if ghost.part == d and ghost.token == my and ghost.modes.invis then
+				local rr = getRoot()
+				if rr then
+					rr.Anchored = true
+				end
+			end
+		end)
+	end
+
+	local function ghostBegin(mode)
+		local r, h, c = getRoot(), getHum(), getCam()
+		if not (r and h and c) then
+			return noChar()
+		end
+		if ghost.modes[mode] then
+			return false
+		end
+		if not ghost.part then
+			local d = Instance.new("Part")
+			d.Name = "TokenHubGhost"
+			d.Anchored = true
+			d.CanCollide = false
+			d.CanQuery = false
+			d.CanTouch = false
+			d.Transparency = 1
+			d.Size = Vector3.one
+			d.CFrame = CFrame.new(r.Position + Vector3.new(0, 2, 0))
+			d.Parent = Workspace
+			ghost.part = d
+			ghost.home = r.CFrame
+			if not active.spectate then
+				c.CameraSubject = d
+			end
+			ghost.modes[mode] = true
+			if mode == "invis" then
+				ghostBodyFar(r)
+			else
+				r.Anchored = true
+			end
+			return true
+		end
+		-- มีจุดกล้องอยู่แล้ว (อีกโหมดเปิดอยู่) -> ซ้อนเพิ่ม
+		ghost.modes[mode] = true
+		if mode == "invis" then
+			ghostBodyFar(r)
+		end
+		return true
+	end
+
+	local function ghostEnd(mode)
+		if not ghost.modes[mode] then
+			return
+		end
+		ghost.modes[mode] = nil
+		local r = getRoot()
+
+		-- ยังเหลืออีกโหมดเปิดอยู่ -> เก็บจุดกล้องไว้
+		if ghost.modes.invis or ghost.modes.free then
+			if mode == "invis" and r and not ghost.skip then
+				-- ปิดหายตัวแต่ถอดจิตยังอยู่: ตัวกลับที่เดิมแล้วล็อกไว้
+				ghost.token += 1
+				r.Anchored = false
+				r.CFrame = ghost.home
+				r.AssemblyLinearVelocity = Vector3.zero
+				r.Anchored = true
+			end
+			return
+		end
+
+		-- โหมดสุดท้าย -> เก็บกวาดทั้งหมด
+		local g = ghost.part
+		if not g then
+			return
+		end
+		ghost.part = nil
+		ghost.token += 1
+		local pos = g.Position
+		g:Destroy()
+		local h, c = getHum(), getCam()
+		if r then
+			r.Anchored = false
+			if mode == "invis" and not ghost.skip then
+				-- โผล่ตรงที่กล้องอยู่
+				r.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+				r.AssemblyLinearVelocity = Vector3.zero
+			end
+		end
+		ghost.skip = false
+		ghost.home = nil
+		if c and h and not (active.spectate and spec.target) then
+			c.CameraSubject = h
+		end
+	end
+	local function ghostUpdate(c, h, dt)
+		local g = ghost.part
+		if not g or not h then
+			return
+		end
+		if not active.spectate and c.CameraSubject ~= g then
+			c.CameraSubject = g
+		end
+		g.CFrame = g.CFrame + moveVector(c, h) * S.fly * dt
+	end
+
+	-- =====================================================================
+	-- 9) X-Ray
+	-- =====================================================================
+	local xr = { orig = setmetatable({}, { __mode = "k" }), conn = nil, token = 0, hl = {} }
+	local function xrPart(p)
+		if p:IsA("BasePart") and not p:IsA("Terrain") then
+			local m = p:FindFirstAncestorWhichIsA("Model")
+			if m and m:FindFirstChildOfClass("Humanoid") then
+				return
+			end
+			if xr.orig[p] == nil then
+				xr.orig[p] = p.Transparency
+			end
+			if p.Transparency < 0.65 then
+				p.Transparency = 0.65
+			end
+		end
+	end
+	local function xrHighlights()
+		for p, h in xr.hl do
+			if not p.Parent then
+				h:Destroy()
+				xr.hl[p] = nil
+			end
+		end
+		local n = 0
+		for _, p in Players:GetPlayers() do
+			if p ~= lp and p.Character and n < 30 then
+				n += 1
+				local h = xr.hl[p]
+				if not h or not h.Parent or h.Adornee ~= p.Character then
+					if h then
+						h:Destroy()
+					end
+					h = Instance.new("Highlight")
+					h.Name = "TokenHubXRay"
+					h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+					h.FillColor = Color3.fromRGB(255, 70, 70)
+					h.FillTransparency = 0.55
+					h.OutlineColor = WHITE
+					h.Adornee = p.Character
+					h.Parent = p.Character
+					xr.hl[p] = h
+				end
+			end
+		end
+	end
+	local function xrOn()
+		xr.token += 1
+		local my = xr.token
+		xr.conn = Workspace.DescendantAdded:Connect(xrPart)
+		xrHighlights()
+		task.spawn(function()
+			local n = 0
+			for _, d in Workspace:GetDescendants() do
+				if xr.token ~= my then
+					return
+				end
+				xrPart(d)
+				n += 1
+				if n % 400 == 0 then
+					task.wait()
+				end
+			end
+		end)
+	end
+	local function xrOff()
+		xr.token += 1
+		if xr.conn then
+			xr.conn:Disconnect()
+			xr.conn = nil
+		end
+		for p, t in xr.orig do
+			if p.Parent then
+				p.Transparency = t
+			end
+		end
+		table.clear(xr.orig)
+		for p, h in xr.hl do
+			h:Destroy()
+			xr.hl[p] = nil
+		end
+	end
+
+	-- =====================================================================
+	-- 11) ขยาย Hitbox (ผู้เล่นอื่น + บอท)
+	-- =====================================================================
+	local hb = { orig = {} }
+	local function hbOne(model)
+		local r = model:FindFirstChild("HumanoidRootPart")
+		if not r then
+			return
+		end
+		if not hb.orig[r] then
+			hb.orig[r] = { size = r.Size, tr = r.Transparency, cc = r.CanCollide, ms = r.Massless }
+		end
+		r.Size = Vector3.new(S.hitbox, S.hitbox, S.hitbox)
+		r.Transparency = 0.8
+		r.CanCollide = false
+		r.Massless = true
+	end
+	local function hbApply()
+		for _, p in Players:GetPlayers() do
+			if p ~= lp and p.Character then
+				hbOne(p.Character)
+			end
+		end
+		for h in bots do
+			local m = h.Parent
+			if m and m ~= lp.Character and not Players:GetPlayerFromCharacter(m) then
+				hbOne(m)
+			end
+		end
+	end
+	local function hbRestore()
+		for r, o in hb.orig do
+			if r.Parent then
+				r.Size, r.Transparency, r.CanCollide, r.Massless = o.size, o.tr, o.cc, o.ms
+			end
+		end
+		table.clear(hb.orig)
+	end
+
+	-- =====================================================================
+	-- 12-13) ล็อกผู้เล่น / ล็อกบอท อัตโนมัติ   14) แรงดูด
+	-- =====================================================================
+	local function aimUpdate(c)
+		local origin = c.CFrame.Position
+		local best, bd = nil, AIM_RANGE
+		local function consider(model)
+			if model == lp.Character then
+				return
+			end
+			local hum = model:FindFirstChildOfClass("Humanoid")
+			if not hum or hum.Health <= 0 then
+				return
+			end
+			local part = model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart")
+			if not part then
+				return
+			end
+			local d = (part.Position - origin).Magnitude
+			if d < bd then
+				best, bd = part, d
+			end
+		end
+		if active.lockp then
+			for _, p in Players:GetPlayers() do
+				if p ~= lp and p.Character then
+					consider(p.Character)
+				end
+			end
+		end
+		if active.lockb then
+			for hum in bots do
+				local m = hum.Parent
+				if not m then
+					bots[hum] = nil
+				elseif not Players:GetPlayerFromCharacter(m) then
+					consider(m)
+				end
+			end
+		end
+		if best then
+			c.CFrame = c.CFrame:Lerp(CFrame.lookAt(origin, best.Position), 0.6)
+		end
+	end
+
+	local function pullStep()
+		local c = getCam()
+		local r = getRoot()
+		local origin = ghost.part and ghost.part.Position or (r and r.Position)
+		if not (origin and c) then
+			return
+		end
+		local look = c.CFrame.LookVector
+		local flat = Vector3.new(look.X, 0, look.Z)
+		flat = flat.Magnitude > 0.05 and flat.Unit or Vector3.zAxis
+		local goal = origin + flat * 4
+		local a = (S.pull / 10) ^ 2 * 0.7 + 0.01 -- ระดับ 1 เบา ๆ ... ระดับ 10 แทบดูดทันที
+		local function pullModel(m)
+			local tr = m:FindFirstChild("HumanoidRootPart")
+			if tr and (tr.Position - origin).Magnitude <= PULL_RANGE then
+				tr.CFrame = tr.CFrame:Lerp(CFrame.new(goal) * tr.CFrame.Rotation, a)
+				tr.AssemblyLinearVelocity = Vector3.zero
+			end
+		end
+		for _, p in Players:GetPlayers() do
+			if p ~= lp and p.Character then
+				pullModel(p.Character)
+			end
+		end
+		for hum in bots do
+			local m = hum.Parent
+			if m and m ~= lp.Character and not Players:GetPlayerFromCharacter(m) then
+				pullModel(m)
+			end
+		end
+	end
+
+	-- =====================================================================
+	-- 15-16) ลดกราฟิก / ภาพดินน้ำมัน   (level 1 = ลด, level 2 = ดินน้ำมัน)
+	-- =====================================================================
+	local gfx = { level = 0, token = 0, saved = setmetatable({}, { __mode = "k" }), sa = {}, light = nil, conn = nil }
+
+	local function gfxState(d)
+		local s = gfx.saved[d]
+		if not s then
+			s = {}
+			gfx.saved[d] = s
+		end
+		return s
+	end
+	local function gfxInst(d, level)
+		if d:IsA("Terrain") then
+			return
+		end
+		if d:IsA("BasePart") then
+			local s = gfxState(d)
+			if s.m == nil then
+				s.m, s.r, s.c = d.Material, d.Reflectance, d.CastShadow
+			end
+			d.CastShadow = false
+			d.Reflectance = 0
+			if level >= 2 then
+				d.Material = Enum.Material.SmoothPlastic
+				if d:IsA("MeshPart") then
+					if s.t == nil then
+						s.t = d.TextureID
+					end
+					d.TextureID = ""
+				end
+			end
+		elseif d:IsA("Decal") then -- รวม Texture
+			if level >= 2 then
+				local s = gfxState(d)
+				if s.tr == nil then
+					s.tr = d.Transparency
+				end
+				d.Transparency = 1
+			end
+		elseif d:IsA("SurfaceAppearance") then
+			if level >= 2 and d.Parent then
+				gfx.sa[#gfx.sa + 1] = { d, d.Parent }
+				d.Parent = nil
+			end
+		elseif
+			d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam")
+			or d:IsA("Fire") or d:IsA("Smoke") or d:IsA("Sparkles")
+		then
+			local s = gfxState(d)
+			if s.en == nil then
+				s.en = d.Enabled
+			end
+			d.Enabled = false
+		elseif d:IsA("Light") then
+			local s = gfxState(d)
+			if s.sh == nil then
+				s.sh = d.Shadows
+			end
+			d.Shadows = false
+		end
+	end
+	local function gfxLightingOn()
+		local L = { fx = {} }
+		gfx.light = L
+		L.gs, L.sp = Lit.GlobalShadows, Lit.EnvironmentSpecularScale
+		Lit.GlobalShadows = false
+		Lit.EnvironmentSpecularScale = 0
+		for _, e in Lit:GetChildren() do
+			if e:IsA("PostEffect") then
+				L.fx[e] = e.Enabled
+				e.Enabled = false
+			end
+		end
+		local c = getCam()
+		if c then
+			for _, e in c:GetChildren() do
+				if e:IsA("PostEffect") then
+					L.fx[e] = e.Enabled
+					e.Enabled = false
+				end
+			end
+		end
+		pcall(function()
+			local t = Workspace.Terrain
+			L.td, L.wr, L.ww = t.Decoration, t.WaterReflectance, t.WaterWaveSize
+			t.Decoration = false
+			t.WaterReflectance = 0
+			t.WaterWaveSize = 0
+		end)
+		pcall(function()
+			L.q = settings().Rendering.QualityLevel
+			settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+		end)
+	end
+	local function gfxRevert()
+		if gfx.conn then
+			gfx.conn:Disconnect()
+			gfx.conn = nil
+		end
+		for d, s in gfx.saved do
+			if d.Parent then
+				if s.m ~= nil then
+					d.Material, d.Reflectance, d.CastShadow = s.m, s.r, s.c
+				end
+				if s.t ~= nil then
+					d.TextureID = s.t
+				end
+				if s.tr ~= nil then
+					d.Transparency = s.tr
+				end
+				if s.en ~= nil then
+					d.Enabled = s.en
+				end
+				if s.sh ~= nil then
+					d.Shadows = s.sh
+				end
+			end
+		end
+		table.clear(gfx.saved)
+		for _, pair in gfx.sa do
+			if pair[2].Parent then
+				pair[1].Parent = pair[2]
+			end
+		end
+		table.clear(gfx.sa)
+		local L = gfx.light
+		if L then
+			Lit.GlobalShadows, Lit.EnvironmentSpecularScale = L.gs, L.sp
+			for e, en in L.fx do
+				if e.Parent then
+					e.Enabled = en
+				end
+			end
+			pcall(function()
+				local t = Workspace.Terrain
+				t.Decoration, t.WaterReflectance, t.WaterWaveSize = L.td, L.wr, L.ww
+			end)
+			pcall(function()
+				if L.q then
+					settings().Rendering.QualityLevel = L.q
+				end
+			end)
+			gfx.light = nil
+		end
+	end
+	local function gfxSet(level)
+		gfx.token += 1
+		local my = gfx.token
+		gfxRevert()
+		gfx.level = level
+		if level == 0 then
+			return
+		end
+		gfxLightingOn()
+		gfx.conn = Workspace.DescendantAdded:Connect(function(d)
+			gfxInst(d, level)
+		end)
+		task.spawn(function()
+			local n = 0
+			for _, d in Workspace:GetDescendants() do
+				if gfx.token ~= my then
+					return
+				end
+				gfxInst(d, level)
+				n += 1
+				if n % 300 == 0 then
+					task.wait()
+				end
+			end
+		end)
+	end
+
+	-- =====================================================================
+	-- 17) แมพสว่าง (1-10)
+	-- =====================================================================
+	local br = { s = nil }
+	local function brApply()
+		if not br.s then
+			local s = {
+				b = Lit.Brightness, a = Lit.Ambient, o = Lit.OutdoorAmbient,
+				e = Lit.ExposureCompensation, fe = Lit.FogEnd, atm = {},
+			}
+			for _, a in Lit:GetChildren() do
+				if a:IsA("Atmosphere") then
+					s.atm[a] = a.Density
+				end
+			end
+			br.s = s
+		end
+		local s, t = br.s, S.bright / 10
+		Lit.Brightness = s.b + t * 4
+		Lit.Ambient = s.a:Lerp(WHITE, t)
+		Lit.OutdoorAmbient = s.o:Lerp(WHITE, t)
+		Lit.ExposureCompensation = s.e + t * 1.2
+		if t >= 0.3 then
+			Lit.FogEnd = math.max(s.fe, 1e5)
+		end
+		for a, d in s.atm do
+			if a.Parent then
+				a.Density = d * (1 - t)
+			end
+		end
+	end
+	local function brRestore()
+		local s = br.s
+		if not s then
+			return
+		end
+		Lit.Brightness, Lit.Ambient, Lit.OutdoorAmbient = s.b, s.a, s.o
+		Lit.ExposureCompensation, Lit.FogEnd = s.e, s.fe
+		for a, d in s.atm do
+			if a.Parent then
+				a.Density = d
+			end
+		end
+		br.s = nil
+	end
+
+	-- =====================================================================
+	-- 18-21) เซิร์ฟเวอร์ / เพลง
+	-- =====================================================================
+	-- LocalScript ปกติไม่มี game:HttpGet / loadstring (มีแค่ตัวรันสคริปต์ภายนอก)
+	local caps = {
+		http = pcall(function()
+			local _ = game.HttpGet
+		end),
+		load = pcall(function()
+			return loadstring("return 1")()
+		end),
+	}
+	caps.ext = caps.http and caps.load
+
+	local function serverHop()
+		if not caps.http then
+			-- ไม่มีทางดึงรายชื่อเซิร์ฟจากฝั่งผู้เล่นได้ -> สุ่มเข้าเซิร์ฟใหม่แทน
+			notify("ที่นี่ดึงรายชื่อเซิร์ฟไม่ได้ จึงสุ่มย้ายเซิร์ฟใหม่แทน...")
+			task.spawn(function()
+				local ok = pcall(function()
+					TeleportService:Teleport(game.PlaceId, lp)
+				end)
+				if not ok then
+					notify("ย้ายเซิร์ฟไม่สำเร็จ (เทสใน Studio ไม่ได้)")
+				end
+			end)
+			return
+		end
+		notify("กำลังหาเซิร์ฟเวอร์คนน้อย...")
+		task.spawn(function()
+			local ok, res = pcall(function()
+				local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId)
+				return HttpService:JSONDecode(game:HttpGet(url))
+			end)
+			if not ok or type(res) ~= "table" or type(res.data) ~= "table" then
+				notify("ดึงรายชื่อเซิร์ฟไม่ได้ (ต้องรองรับ HttpGet)")
+				return
+			end
+			local pick = nil
+			for _, s in res.data do
+				if s.id ~= game.JobId and s.playing and s.maxPlayers and s.playing < s.maxPlayers then
+					if not pick or s.playing < pick.playing then
+						pick = s
+					end
+				end
+			end
+			if not pick then
+				notify("ไม่พบเซิร์ฟเวอร์อื่น")
+				return
+			end
+			notify(("ย้ายไปเซิร์ฟที่มี %d คน..."):format(pick.playing))
+			local ok2 = pcall(function()
+				TeleportService:TeleportToPlaceInstance(game.PlaceId, pick.id, lp)
+			end)
+			if not ok2 then
+				notify("ย้ายเซิร์ฟไม่สำเร็จ")
+			end
+		end)
+	end
+	local function rejoin()
+		notify("กำลังรีเชิฟ...")
+		task.spawn(function()
+			local ok = pcall(function()
+				if #Players:GetPlayers() <= 1 then
+					TeleportService:Teleport(game.PlaceId, lp)
+				else
+					TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, lp)
+				end
+			end)
+			if not ok then
+				notify("รีเชิฟไม่สำเร็จ")
+			end
+		end)
+	end
+	local function runExternal(info)
+		if not caps.ext then
+			notify("ใช้ไม่ได้ใน LocalScript ปกติ (ต้องมี HttpGet + loadstring)")
+			return
+		end
+		notify("กำลังโหลด: " .. info.name)
+		task.spawn(function()
+			local ok, err = pcall(function()
+				loadstring(game:HttpGet("https://encrypt-x.pages.dev/Scripts?Id=" .. info.id))(info.id)
+			end)
+			if ok then
+				notify("โหลดแล้ว: " .. info.name)
+			else
+				notify("โหลดไม่สำเร็จ: " .. tostring(err))
+			end
+		end)
+	end
+
+	-- =====================================================================
+	-- ตารางฟีเจอร์ (เปิด/ปิด)
+	-- =====================================================================
+	feats.fly = {
+		enable = function()
+			if not flyStart() then
+				return noChar()
+			end
+			return true
+		end,
+		disable = flyStop,
+	}
+	feats.speed = {
+		enable = function()
+			spd.hum = nil
+			return true
+		end,
+		disable = function()
+			local h = getHum()
+			if h and spd.hum == h and spd.orig then
+				h.WalkSpeed = spd.orig
+			end
+			spd.hum, spd.orig = nil, nil
+		end,
+	}
+	feats.infjump = { enable = function() end, disable = function() end }
+	feats.noclip = { enable = function() end, disable = noclipRestore }
+	feats.tptool = {
+		enable = function()
+			giveTpTool()
+			return true
+		end,
+		disable = function()
+			if tpTool then
+				tpTool:Destroy()
+				tpTool = nil
+			end
+		end,
+	}
+	-- หายตัว + ถอดจิต เปิดพร้อมกันได้ (ไม่มี excl)
+	feats.invis = {
+		enable = function()
+			return ghostBegin("invis")
+		end,
+		disable = function()
+			ghostEnd("invis")
+		end,
+	}
+	feats.free = { -- ถอดจิต = มอง 3D อันเก่า
+		enable = function()
+			return ghostBegin("free")
+		end,
+		disable = function()
+			ghostEnd("free")
+		end,
+	}
+	local god = {}
+	feats.god = {
+		enable = function()
+			god.hum = nil
+			return true
+		end,
+		disable = function()
+			local h = getHum()
+			if h and god.hum == h then
+				h.MaxHealth = god.max or 100
+				h.Health = h.MaxHealth
+				h:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+			end
+			god.hum, god.max = nil, nil
+		end,
+	}
+	feats.spectate = {
+		enable = function()
+			local l = specCandidates()
+			if #l == 0 then
+				notify("ไม่มีผู้เล่นคนอื่นในเซิร์ฟ")
+				return false
+			end
+			if not (spec.target and table.find(l, spec.target)) then
+				spec.target = l[1]
+			end
+			specLabelUpdate()
+			return true
+		end,
+		disable = function()
+			local c, h = getCam(), getHum()
+			if c then
+				c.CameraSubject = ghost.part or h
+			end
+		end,
+	}
+	feats.xray = { enable = function() xrOn() return true end, disable = xrOff }
+	feats.hitbox = {
+		enable = function()
+			hbApply()
+			return true
+		end,
+		disable = hbRestore,
+	}
+	feats.lockp = { enable = function() end, disable = function() end }
+	feats.lockb = { enable = function() end, disable = function() end }
+	feats.pull = { enable = function() end, disable = function() end }
+	-- ลดกราฟิก + ภาพดินน้ำมัน เปิดพร้อมกันได้ (ใช้ระดับที่แรงกว่า)
+	local function gfxRefresh()
+		gfxSet(active.clay and 2 or (active.lowgfx and 1 or 0))
+	end
+	feats.lowgfx = {
+		enable = function() gfxRefresh() return true end,
+		disable = gfxRefresh,
+	}
+	feats.clay = {
+		enable = function() gfxRefresh() return true end,
+		disable = gfxRefresh,
+	}
+	feats.bright = {
+		enable = function() brApply() return true end,
+		disable = brRestore,
+	}
+
+	setFeature = function(id, on)
+		on = on and true or false
+		if (active[id] or false) == on then
+			return
+		end
+		local f = feats[id]
+		if not f then
+			return
+		end
+		if on and f.excl and active[f.excl] then
+			setFeature(f.excl, false)
+		end
+		active[id] = on
+		local ok, res = pcall(on and f.enable or f.disable)
+		if on and (not ok or res == false) then
+			active[id] = false
+			if not ok then
+				notify("เปิดไม่สำเร็จ: " .. tostring(res))
+			end
+		end
+		if ui[id] then
+			ui[id](active[id] or false)
+		end
+	end
+
+	-- ลบมอง3dออก: ปิดถอดจิต/กล้องอิสระ แล้วคืนกล้องกลับมาที่ตัวละคร
+	local function remove3D()
+		local was = active.free or false
+		if active.free then
+			setFeature("free", false)
+		end
+		local c, h = getCam(), getHum()
+		if c and h and not ghost.part and not (active.spectate and spec.target) then
+			c.CameraType = Enum.CameraType.Custom
+			c.CameraSubject = h
+			local r = getRoot()
+			if r and r.Anchored and not active.invis then
+				r.Anchored = false
+			end
+		end
+		notify(was and "ลบมอง 3D ออกแล้ว" or "ไม่มีมอง 3D ที่เปิดอยู่ — รีเซ็ตกล้องให้แล้ว")
+	end
+
+	-- =====================================================================
+	-- UI
+	-- =====================================================================
+	local CATS = {
+		{
+			name = "เคลื่อนที่", color = "#4fc3f7",
+			items = {
+				{ id = "fly", title = "บิน", desc = "ลอยตามทิศกล้อง · Space ขึ้น · Ctrl/Q ลง",
+					slider = { key = "fly", min = 1, max = 999, step = 1 } },
+				{ id = "speed", title = "ความเร็วในการวิ่ง", desc = "ปรับความเร็ววิ่ง 1–999",
+					slider = { key = "speed", min = 1, max = 999, step = 1 } },
+				{ id = "infjump", title = "กระโดดไม่จำกัด", desc = "กดกระโดดซ้ำกลางอากาศได้เรื่อย ๆ" },
+				{ id = "noclip", title = "เดินทะลุ", desc = "ทะลุกำแพงและสิ่งของ" },
+				{ id = "tptool", title = "วาปไปจุดที่กด", desc = "ได้ไอเทมในกระเป๋า กดที่พื้นเพื่อวาป" },
+			},
+		},
+		{
+			name = "ตัวละคร", color = "#ba68c8",
+			items = {
+				{ id = "invis", title = "หายตัว", desc = "คนอื่นไม่เห็นจริง · กล้องยังอยู่ในแมพ" },
+				{ id = "god", title = "อมตะ / Inf", desc = "เลือดไม่ลด" },
+				{ id = "hitbox", title = "ขยาย Hitbox", desc = "ขนาด 0.5–100 (ผู้เล่น + บอท)",
+					slider = { key = "hitbox", min = 0.5, max = 100, step = 0.5 } },
+			},
+		},
+		{
+			name = "การมองเห็น", color = "#81c784",
+			items = {
+				{ id = "spectate", title = "มองผู้เล่นอื่น", desc = "กด ◀ ▶ เลือกคนที่จะดู", extra = "spectate" },
+				{ id = "xray", title = "X-Ray", desc = "มองทะลุสิ่งของ เห็นผู้เล่นผ่านกำแพง" },
+				{ id = "free", title = "ถอดจิต", desc = "กล้องอิสระ ตัวยืนอยู่ที่เดิม บินดูทั่วแมพ (ความเร็วตามสไลเดอร์บิน)" },
+				{ id = "remove3d", kind = "action", btn = "ลบ", title = "ลบมอง3dออก", desc = "ปิดถอดจิต/กล้องอิสระ คืนกล้องกลับตัวละคร",
+					run = remove3D },
+			},
+		},
+		{
+			name = "ต่อสู้", color = "#e57373",
+			items = {
+				{ id = "lockp", title = "ล็อกผู้เล่นอัตโนมัติ", desc = "กล้องหันหาผู้เล่นที่ใกล้ที่สุด" },
+				{ id = "lockb", title = "ล็อกบอทอัตโนมัติ", desc = "กล้องหันหาบอท/NPC ที่ใกล้ที่สุด" },
+				{ id = "pull", title = "แรงดูดผู้เล่นและบอท", desc = "ระดับ 1–10 (10 = แรงมาก)",
+					slider = { key = "pull", min = 1, max = 10, step = 1 } },
+			},
+		},
+		{
+			name = "กราฟิก", color = "#ffb74d",
+			items = {
+				{ id = "lowgfx", title = "ลดกราฟิก", desc = "ปิดเงา เอฟเฟกต์ อนุภาค" },
+				{ id = "clay", title = "ภาพดินน้ำมัน", desc = "ลดกราฟิกสุด ๆ ทุกอย่างเรียบเป็นก้อน" },
+				{ id = "bright", title = "แมพสว่าง", desc = "ระดับ 1–10",
+					slider = { key = "bright", min = 1, max = 10, step = 1 } },
+			},
+		},
+		{
+			name = "เซิร์ฟ & เพลง", color = "#4dd0e1",
+			items = {
+				{ id = "hop", kind = "action", btn = "ย้าย", title = "ย้ายเชิฟคนน้อย", desc = caps.http and "ไปเซิร์ฟที่มีคนน้อยที่สุด" or "สุ่มเข้าเซิร์ฟใหม่ (หาคนน้อยไม่ได้ในสคริปต์ปกติ)",
+					run = serverHop },
+				{ id = "rejoin", kind = "action", btn = "รีเชิฟ", title = "รีเชิฟ / กลับเชิฟเดิม", desc = "เข้าเซิร์ฟเดิมอีกครั้ง",
+					run = rejoin },
+				{ id = "music", kind = "action", btn = caps.ext and "เปิด" or "ไม่รองรับ", title = "เปิดเพลงคนอื่นไม่ได้ยิน",
+					desc = caps.ext and "สคริปต์ภายนอก · ใช้ได้บางแมพ" or "ต้องใช้ตัวรันที่รองรับ HttpGet/loadstring",
+					run = function() runExternal(EXTERNAL.music) end },
+				{ id = "steal", kind = "action", btn = caps.ext and "เปิด" or "ไม่รองรับ", title = "ดูดเพลง",
+					desc = caps.ext and "สคริปต์ภายนอก" or "ต้องใช้ตัวรันที่รองรับ HttpGet/loadstring",
+					run = function() runExternal(EXTERNAL.steal) end },
+			},
+		},
+	}
+
+	local OFFC, ONC = col("#2a1a0c"), col("#579a3d")
+	local DARK = col("#1b1208")
+
+	local function stroke(parent, color, th)
+		return make("UIStroke", {
+			Color = color or DARK,
+			Thickness = th or 2,
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		}, parent)
+	end
+
+	-- กรอบซ้าย (หมวดหมู่) / กรอบขวา (สคริปต์)
+	local side = make("Frame", {
+		Name = "Side",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(0, 124, 1, 0),
+	}, content)
+	make("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, side)
+
+	local pageHolder = make("Frame", {
+		Name = "Pages",
+		Position = UDim2.fromOffset(132, 0),
+		Size = UDim2.new(1, -132, 1, 0),
+		BackgroundColor3 = col("#3b2512"),
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+	}, content)
+	stroke(pageHolder)
+
+	-- ข้อความแจ้งเตือนเล็ก ๆ ด้านล่าง
+	local toast = make("TextLabel", {
+		Name = "Toast",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -8),
+		Size = UDim2.new(1, -24, 0, 26),
+		BackgroundColor3 = DARK,
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		Font = MED,
+		TextSize = 12,
+		TextColor3 = WHITE,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Text = "",
+		Visible = false,
+		ZIndex = 60,
+	}, pageHolder)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, toast)
+	local toastTok = 0
+	notify = function(msg)
+		toastTok += 1
+		local my = toastTok
+		local n = utf8.len(msg) or #msg
+		if n > 70 then
+			msg = msg:sub(1, (utf8.offset(msg, 71) or (#msg + 1)) - 1) .. "…"
+		end
+		toast.Text = msg
+		toast.Visible = true
+		task.delay(2.8, function()
+			if toastTok == my then
+				toast.Visible = false
+			end
+		end)
+	end
+
+	local pages, catBtns = {}, {}
+	local selected = 1
+
+	local function newPage(i)
+		local p = make("ScrollingFrame", {
+			Name = "Page" .. i,
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 4,
+			ScrollBarImageColor3 = col(C.yellow),
+			CanvasSize = UDim2.new(),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			Visible = false,
+		}, pageHolder)
+		make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, p)
+		make("UIPadding", {
+			PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 36),
+			PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 10),
+		}, p)
+		return p
+	end
+
+	local function refreshCats()
+		for i, b in catBtns do
+			local on = i == selected
+			pages[i].Visible = on
+			b.btn.BackgroundColor3 = on and col(C.yellow) or col("#46301a")
+			b.lbl.TextColor3 = on and col("#3b2512") or WHITE
+		end
+	end
+
+	-- ปุ่มสวิตช์
+	local function makeToggle(row, id)
+		local sw = make("TextButton", {
+			Name = "Toggle",
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -10, 0, 25),
+			Size = UDim2.fromOffset(46, 24),
+			BackgroundColor3 = OFFC,
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			Text = "",
+		}, row)
+		stroke(sw)
+		local knob = make("Frame", {
+			Size = UDim2.fromOffset(16, 16),
+			Position = UDim2.fromOffset(4, 4),
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+		}, sw)
+		ui[id] = function(on)
+			TweenService:Create(sw, tFade, { BackgroundColor3 = on and ONC or OFFC }):Play()
+			TweenService:Create(knob, tFade, { Position = on and UDim2.fromOffset(26, 4) or UDim2.fromOffset(4, 4) }):Play()
+		end
+		sw.Activated:Connect(function()
+			setFeature(id, not active[id])
+		end)
+	end
+
+	-- ปุ่มกดทำงานครั้งเดียว
+	local function makeAction(row, text, cb)
+		local base = col(C.yellow)
+		local b = make("TextButton", {
+			Name = "Action",
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -10, 0, 25),
+			Size = UDim2.fromOffset(88, 28),
+			BackgroundColor3 = base,
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			Text = text,
+			Font = BOLD,
+			TextSize = 12,
+			TextColor3 = col("#3b2512"),
+		}, row)
+		stroke(b, col("#3b2a00"))
+		bevel(b, 2, 2, "#fff3a0", "#8a6d00", 0.2, 0.2)
+		b.MouseEnter:Connect(function()
+			TweenService:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = base:Lerp(WHITE, 0.25) }):Play()
+		end)
+		b.MouseLeave:Connect(function()
+			TweenService:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = base }):Play()
+		end)
+		b.Activated:Connect(cb)
+	end
+
+	-- สไลเดอร์ + ช่องพิมพ์ตัวเลข
+	local function makeSlider(row, page, y, sl, onChange)
+		local hit = make("TextButton", {
+			Name = "SliderHit",
+			Position = UDim2.fromOffset(10, y),
+			Size = UDim2.new(1, -92, 0, 22),
+			BackgroundTransparency = 1,
+			AutoButtonColor = false,
+			Text = "",
+		}, row)
+		local bar = make("Frame", {
+			Position = UDim2.new(0, 0, 0.5, -3),
+			Size = UDim2.new(1, 0, 0, 6),
+			BackgroundColor3 = DARK,
+			BorderSizePixel = 0,
+		}, hit)
+		local fill = make("Frame", {
+			Size = UDim2.fromScale(0, 1),
+			BackgroundColor3 = col(C.yellow),
+			BorderSizePixel = 0,
+		}, bar)
+		local knob = make("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0, 0.5),
+			Size = UDim2.fromOffset(12, 18),
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, bar)
+		stroke(knob, DARK, 2)
+
+		local box = make("TextBox", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -10, 0, y - 1),
+			Size = UDim2.fromOffset(62, 24),
+			BackgroundColor3 = OFFC,
+			BorderSizePixel = 0,
+			ClearTextOnFocus = false,
+			Font = FONT,
+			TextSize = 16,
+			TextColor3 = col(C.yellow),
+			Text = "",
+		}, row)
+		stroke(box)
+
+		local function setVal(v, fire)
+			v = math.clamp(math.round(v / sl.step) * sl.step, sl.min, sl.max)
+			S[sl.key] = v
+			local a = (v - sl.min) / (sl.max - sl.min)
+			fill.Size = UDim2.fromScale(a, 1)
+			knob.Position = UDim2.fromScale(a, 0.5)
+			box.Text = string.format("%g", v)
+			if fire and onChange then
+				onChange(v)
+			end
+		end
+		setVal(S[sl.key], false)
+
+		local function fromX(x)
+			local rel = (x - hit.AbsolutePosition.X) / math.max(1, hit.AbsoluteSize.X)
+			setVal(sl.min + (sl.max - sl.min) * math.clamp(rel, 0, 1), true)
+		end
+		local dragging, tracked = false, nil
+		hit.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging, tracked = true, input
+				page.ScrollingEnabled = false
+				fromX(input.Position.X)
+			end
+		end)
+		track(UIS.InputChanged:Connect(function(input)
+			if not dragging then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseMovement
+				or (input.UserInputType == Enum.UserInputType.Touch and input == tracked) then
+				fromX(input.Position.X)
+			end
+		end))
+		track(UIS.InputEnded:Connect(function(input)
+			if dragging and (input == tracked or input.UserInputType == Enum.UserInputType.MouseButton1) then
+				dragging, tracked = false, nil
+				page.ScrollingEnabled = true
+			end
+		end))
+		box.FocusLost:Connect(function()
+			local n = tonumber(box.Text)
+			if n then
+				setVal(n, true)
+			else
+				setVal(S[sl.key], false)
+			end
+		end)
+	end
+
+	-- แถวเลือกผู้เล่นสำหรับ "มองผู้เล่นอื่น"
+	local function makeSpecExtra(row, y)
+		local function arrow(text, anchorX, x, d)
+			local b = make("TextButton", {
+				AnchorPoint = Vector2.new(anchorX, 0),
+				Position = UDim2.new(anchorX, x, 0, y),
+				Size = UDim2.fromOffset(34, 24),
+				BackgroundColor3 = OFFC,
+				AutoButtonColor = false,
+				BorderSizePixel = 0,
+				Text = text,
+				Font = BOLD,
+				TextSize = 14,
+				TextColor3 = col(C.yellow),
+			}, row)
+			stroke(b)
+			b.Activated:Connect(function()
+				specShift(d)
+			end)
+		end
+		arrow("◀", 0, 10, -1)
+		arrow("▶", 1, -10, 1)
+		spec.label = make("TextLabel", {
+			Position = UDim2.fromOffset(50, y),
+			Size = UDim2.new(1, -100, 0, 24),
+			BackgroundColor3 = OFFC,
+			BorderSizePixel = 0,
+			Font = BOLD,
+			TextSize = 13,
+			TextColor3 = WHITE,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = "— ไม่มี —",
+		}, row)
+		stroke(spec.label)
+		spec.target = nil
+		specLabelUpdate()
+	end
+
+	local function buildRow(page, item, order)
+		local tall = item.slider or item.extra
+		local row = make("Frame", {
+			Name = item.id,
+			LayoutOrder = order,
+			Size = UDim2.new(1, 0, 0, tall and 84 or 52),
+			BackgroundColor3 = col("#4f3620"),
+			BorderSizePixel = 0,
+		}, page)
+		stroke(row)
+		bevel(row, 2, 2, "#8a6a44", "#2a1a0c", 0.35, 0.25)
+
+		make("TextLabel", {
+			Position = UDim2.fromOffset(10, 6),
+			Size = UDim2.new(1, -90, 0, 20),
+			BackgroundTransparency = 1,
+			Font = BOLD,
+			TextSize = 14,
+			TextColor3 = WHITE,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = item.title,
+		}, row)
+		make("TextLabel", {
+			Position = UDim2.fromOffset(10, 27),
+			Size = UDim2.new(1, -90, 0, 16),
+			BackgroundTransparency = 1,
+			Font = MED,
+			TextSize = 11,
+			TextColor3 = col("#d3c3a2"),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = item.desc,
+		}, row)
+
+		if item.kind == "action" then
+			makeAction(row, item.btn, item.run)
+		else
+			makeToggle(row, item.id)
+		end
+		if item.slider then
+			makeSlider(row, page, 54, item.slider, nil)
+		elseif item.extra == "spectate" then
+			makeSpecExtra(row, 54)
+		end
+	end
+
+	for i, cat in CATS do
+		-- ปุ่มหมวดหมู่
+		local b = make("TextButton", {
+			Name = "Cat" .. i,
+			LayoutOrder = i,
+			Size = UDim2.new(1, 0, 0, 42),
+			BackgroundColor3 = col("#46301a"),
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			Text = "",
+		}, side)
+		stroke(b)
+		bevel(b, 2, 2, "#d8d1c0", "#6a5a44", 0.45, 0.25)
+		make("Frame", {
+			Position = UDim2.fromOffset(10, 17),
+			Size = UDim2.fromOffset(8, 8),
+			BackgroundColor3 = col(cat.color),
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, b)
+		local lbl = make("TextLabel", {
+			Position = UDim2.fromOffset(26, 0),
+			Size = UDim2.new(1, -30, 1, 0),
+			BackgroundTransparency = 1,
+			Font = BOLD,
+			TextSize = 13,
+			TextColor3 = WHITE,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = cat.name,
+			ZIndex = 2,
+		}, b)
+		catBtns[i] = { btn = b, lbl = lbl }
+		b.Activated:Connect(function()
+			selected = i
+			refreshCats()
+		end)
+
+		-- หน้ารายการสคริปต์ของหมวดนั้น
+		local page = newPage(i)
+		pages[i] = page
+		for order, item in cat.items do
+			buildRow(page, item, order)
+		end
+	end
+	refreshCats()
+
+	-- =====================================================================
+	-- ลูปหลัก
+	-- =====================================================================
+	pcall(function()
+		RunService:UnbindFromRenderStep("TokenHubAdmin")
+	end)
+	RunService:BindToRenderStep("TokenHubAdmin", Enum.RenderPriority.Camera.Value + 1, function(dt)
+		local c = getCam()
+		if not c then
+			return
+		end
+		local h = getHum()
+		if active.fly and h then
+			flyUpdate(c, h)
+		end
+		if ghost.part then
+			ghostUpdate(c, h, dt)
+		end
+		if active.spectate then
+			specEnforce(c)
+		elseif active.lockp or active.lockb then
+			aimUpdate(c)
+		end
+	end)
+
+	local acc = { t = 0, x = 0 }
+	track(RunService.Heartbeat:Connect(function(dt)
+		local h = getHum()
+		if h and active.speed then
+			if spd.hum ~= h then
+				spd.hum, spd.orig = h, h.WalkSpeed
+			end
+			if h.WalkSpeed ~= S.speed then
+				h.WalkSpeed = S.speed
+			end
+		end
+		if h and active.god then
+			if god.hum ~= h then
+				god.hum, god.max = h, h.MaxHealth
+				h:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+			end
+			if h.MaxHealth ~= math.huge then
+				h.MaxHealth = math.huge
+			end
+			h.Health = math.huge
+		end
+		if active.pull then
+			pullStep()
+		end
+		acc.t += dt
+		if acc.t >= 0.25 then
+			acc.t = 0
+			if active.hitbox then
+				hbApply()
+			end
+			if active.bright then
+				brApply()
+			end
+		end
+		acc.x += dt
+		if acc.x >= 1 then
+			acc.x = 0
+			if active.xray then
+				xrHighlights()
+			end
+		end
+	end))
+	track(RunService.Stepped:Connect(function()
+		if active.noclip then
+			noclipStep()
+		end
+	end))
+	track(UIS.JumpRequest:Connect(function()
+		if active.infjump then
+			local h = getHum()
+			if h then
+				h:ChangeState(Enum.HumanoidStateType.Jumping)
+			end
+		end
+	end))
+
+	-- ตายแล้วเกิดใหม่: เปิดของที่ต้องเปิดใหม่ / ปิดของที่ใช้ต่อไม่ได้
+	track(lp.CharacterAdded:Connect(function(char)
+		char:WaitForChild("Humanoid", 10)
+		char:WaitForChild("HumanoidRootPart", 10)
+		task.wait(0.2)
+		if active.invis or active.free then
+			ghost.skip = true
+			setFeature("free", false)
+			setFeature("invis", false)
+			ghost.skip = false
+			notify("เกิดใหม่ — ปิดหายตัว/ถอดจิตแล้ว")
+		end
+		if active.fly then
+			flyStart()
+		end
+		if active.tptool then
+			giveTpTool()
+		end
+	end))
+
+	track(Players.PlayerRemoving:Connect(function(p)
+		if spec.target == p then
+			spec.target = nil
+			task.defer(specShift, 1)
+		end
+	end))
+
+	-- ลบ UI -> คืนค่าทุกอย่างกลับเป็นปกติ
+	gui.Destroying:Connect(function()
+		for id, f in feats do
+			if active[id] then
+				active[id] = false
+				pcall(f.disable)
+			end
+		end
+		pcall(function()
+			RunService:UnbindFromRenderStep("TokenHubAdmin")
+		end)
+		for _, c in mine do
+			c:Disconnect()
+		end
+		table.clear(mine)
+	end)
+end
+
+buildAdmin()
+
+
+
+
+-- ขอบนูนรอบหน้าต่างทั้งอัน (บนซ้ายสว่าง ล่างขวามืด)
+bevel(wc, 2, 3, "#ffffff", "#000000", 0.6, 0.45)
+
+-- ===== แคปซูลตอนย่อ =====
+local pc = pill.canvas
+
+makeCoin(pc, pill.holder, UDim2.fromOffset(22, 20), 2)
+
+local function pillText(name, color, off, z)
+	return make("TextLabel", {
+		Name = name,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 44 + off, 0.5, off),
+		Size = UDim2.fromOffset(74, 24),
+		BackgroundTransparency = 1,
+		Text = "Token",
+		Font = FONT,
+		TextSize = 20,
+		TextColor3 = color,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = z,
+	}, pc)
+end
+pillText("Shadow", col(C.yellow2), 2, 3)
+pillText("Text", col(C.yellow), 0, 4)
+
+local dragPill = make("TextButton", {
+	Name = "Drag",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	Text = "",
+	AutoButtonColor = false,
+	ZIndex = 10,
+}, pc)
+
+-- ===== กลางวัน/กลางคืน =====
+local SKY = {
+	dayTop = col(C.sky1), dayBot = col(C.sky2),
+	duskTop = col("#e8875a"), duskBot = col("#f7c98b"),
+	nightTop = col("#0b1530"), nightBot = col("#22386b"),
+}
+local CLOUD_NIGHT = col("#4b5a86")
+local GRASS_NIGHT = Color3.new(0.08, 0.14, 0.2)
+
+local function smooth(x)
+	x = math.clamp(x, 0, 1)
+	return x * x * (3 - 2 * x)
+end
+
+-- ความมืด 0 = กลางวันเต็ม, 1 = กลางคืนเต็ม (t = วินาทีในรอบ)
+local function nightAmount(t)
+	if t >= CYCLE - TWILIGHT then
+		return 1 - smooth((t - (CYCLE - TWILIGHT)) / (TWILIGHT * 2))
+	elseif t < TWILIGHT then
+		return 1 - smooth((t + TWILIGHT) / (TWILIGHT * 2))
+	elseif t < DAY_SEC - TWILIGHT then
+		return 0
+	elseif t < DAY_SEC + TWILIGHT then
+		return smooth((t - (DAY_SEC - TWILIGHT)) / (TWILIGHT * 2))
+	end
+	return 1
+end
+
+-- สีฟ้า: เช้า/เย็นผ่านสีส้มก่อน
+local function skyColors(n)
+	if n < 0.5 then
+		local k = n * 2
+		return SKY.dayTop:Lerp(SKY.duskTop, k), SKY.dayBot:Lerp(SKY.duskBot, k)
+	end
+	local k = (n - 0.5) * 2
+	return SKY.duskTop:Lerp(SKY.nightTop, k), SKY.duskBot:Lerp(SKY.nightBot, k)
+end
+
+-- ลูปหลัก: เหรียญหมุน + ท้องฟ้า
+local ang = 0
+local spinBoost = Instance.new("NumberValue")
+spinBoost.Value = 1
+local lastN = -1
+local t0 = os.clock()
+
+local spinConn = RunService.RenderStepped:Connect(function(dt)
+	-- ขอบ RGB หมุน
+	local rot = (os.clock() * 140) % 360
+	for _, g in rainbows do
+		g.Rotation = rot
+	end
+
+	-- เหรียญ
+	ang = (ang + dt * math.pi * 2 / 2.6 * spinBoost.Value) % (math.pi * 2)
+	local c = math.cos(ang)
+	local w = math.max(2, math.abs(c) * COIN)
+	for _, coin in coins do
+		if coin.owner.Visible then
+			coin.spin.Size = UDim2.fromOffset(w, COIN)
+			coin.front.Visible = c >= 0
+			coin.back.Visible = c < 0
+		end
+	end
+
+	-- ท้องฟ้า (อัปเดตเฉพาะตอนเห็นหน้าต่าง)
+	if not win.holder.Visible then
+		return
+	end
+
+	local clock = os.clock() - t0
+	local t = clock % CYCLE
+	local n = nightAmount(t)
+
+	-- สีฟ้า/เมฆ/หญ้า เปลี่ยนเฉพาะตอนค่ามืดเปลี่ยนจริง ๆ
+	if math.abs(n - lastN) > 0.003 then
+		lastN = n
+		local top, bot = skyColors(n)
+		sky.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, top),
+			ColorSequenceKeypoint.new(0.7, bot),
+			ColorSequenceKeypoint.new(1, bot),
+		})
+		for _, cl in clouds do
+			tint(cl.pieces, CLOUD_NIGHT, n * 0.85)
+		end
+		tint(grassPieces, GRASS_NIGHT, n * 0.6)
+	end
+
+	-- พระอาทิตย์ (กลางวัน) / ดวงจันทร์ (กลางคืน) วิ่งเป็นโค้งข้ามจอ
+	if t < DAY_SEC then
+		local p = t / DAY_SEC
+		sun.Visible = true
+		moon.Visible = false
+		sun.Position = UDim2.fromOffset(
+			math.floor(-SUN_W + (W + SUN_W) * p + 0.5),
+			math.floor(46 - 42 * math.sin(math.pi * p) + 0.5)
+		)
+	else
+		local p = (t - DAY_SEC) / NIGHT_SEC
+		sun.Visible = false
+		moon.Visible = true
+		moon.Position = UDim2.fromOffset(
+			math.floor(-MOON_W + (W + MOON_W) * p + 0.5),
+			math.floor(46 - 38 * math.sin(math.pi * p) + 0.5)
+		)
+	end
+
+	-- เมฆลอยจากขวาไปซ้ายวนไปเรื่อย ๆ
+	for _, cl in clouds do
+		local x = (cl.x0 - cl.speed * clock) % (W + cl.w) - cl.w
+		cl.frame.Position = UDim2.fromOffset(math.floor(x + 0.5), cl.y)
+	end
+
+	-- ดาวกะพริบ
+	for i, s in stars do
+		if n > 0.01 then
+			local tw = 0.5 + 0.5 * math.sin(clock * 2.2 + i * 1.7)
+			s.BackgroundTransparency = 1 - n * (0.4 + 0.6 * tw)
+		elseif s.BackgroundTransparency < 1 then
+			s.BackgroundTransparency = 1
+		end
+	end
+end)
+gui.Destroying:Connect(function()
+	spinConn:Disconnect()
+end)
+
+-- สถานะ
+local camera = workspace.CurrentCamera
+while not camera do
+	task.wait()
+	camera = workspace.CurrentCamera
+end
+
+-- ตอนเพิ่งเข้าเกม ViewportSize ชอบเป็น 1x1 เลยรอให้ขนาดจอมาก่อน
+local waited = 0
+while camera.ViewportSize.X < 100 and waited < 3 do
+	waited += task.wait()
+end
+
+local state = "closed" -- open / mini / closed
+
+local function curSize()
+	return state == "mini" and PILL_SIZE or WIN_SIZE
+end
+
+-- กันไม่ให้ UI หลุดจอ
+local function setPos(v, size)
+	local view = camera.ViewportSize
+	uiPos = Vector2.new(
+		math.clamp(v.X, 0, math.max(0, view.X - size.X)),
+		math.clamp(v.Y, 0, math.max(0, view.Y - size.Y))
+	)
+	if onUiMoved then
+		onUiMoved()
+	end
+	for _, p in { win, pill } do
+		if p.holder.Visible then
+			p:place()
+		end
+	end
+end
+
+local function openWin()
+	if state ~= "closed" then
+		return
+	end
+	state = "open"
+	setPos(uiPos, WIN_SIZE)
+	win:show()
+end
+
+local function closeAll()
+	if state == "open" then
+		win:hide()
+	elseif state == "mini" then
+		pill:hide()
+	end
+	state = "closed"
+end
+
+local function minimize()
+	if state ~= "open" then
+		return
+	end
+	state = "mini"
+	win:hide(pill:center())
+	pill:show()
+end
+
+local function expand()
+	if state ~= "mini" then
+		return
+	end
+	state = "open"
+	setPos(uiPos, WIN_SIZE)
+	pill:hide()
+	win:show(pill:center())
+end
+
+-- ลาก (ถ้าไม่ได้ลากแค่แตะ จะเรียก onClick)
+local function draggable(handle, getSize, onClick)
+	local dragging = false
+	local moved = false
+	local tracked = nil
+	local startPoint = Vector3.zero
+	local startPos = Vector2.zero
+
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			moved = false
+			tracked = input
+			startPoint = input.Position
+			startPos = uiPos
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End and dragging and tracked == input then
+					dragging = false
+					tracked = nil
+					if not moved and onClick then
+						onClick()
+					end
+				end
+			end)
+		end
+	end)
+
+	conns[#conns + 1] = UIS.InputChanged:Connect(function(input)
+		if not dragging then
+			return
+		end
+		local mouse = input.UserInputType == Enum.UserInputType.MouseMovement
+		local touch = input.UserInputType == Enum.UserInputType.Touch and input == tracked
+		if mouse or touch then
+			local d = input.Position - startPoint
+			if d.Magnitude > 4 then
+				moved = true
+			end
+			if moved then
+				setPos(startPos + Vector2.new(d.X, d.Y), getSize())
+			end
+		end
+	end)
+end
+
+draggable(dragHeader, curSize, nil)
+draggable(dragPill, curSize, expand)
+
+minBtn.Activated:Connect(function()
+	if not blocked() then
+		minimize()
+	end
+end)
+-- ===== กล่องถามตอนกด X (liquid glass) =====
+-- กด X -> กระจกใสเด้งขึ้นมาถาม "ยกเลิก" หรือ "ลบออก"
+-- ยกเลิก = ปิดกล่อง กลับไปใช้ต่อ / ลบออก = ลบ UI ทิ้ง
+local Lighting = game:GetService("Lighting")
+
+local GLASS_W, GLASS_H = 270, 132
+local GLASS_BLUR = 14 -- เบลอฉากหลังเกมตอนกล่องเปิด (ใส่ 0 ถ้าไม่เอา)
+local WHITE = Color3.new(1, 1, 1)
+local tJelly = TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+local function seq(keys)
+	local list = {}
+	for _, k in keys do
+		table.insert(list, NumberSequenceKeypoint.new(k[1], k[2]))
+	end
+	return NumberSequence.new(list)
+end
+
+-- ฉากมืดในหน้าต่าง (กดตรงว่าง = ยกเลิก)
+local confirmDim = make("TextButton", {
+	Name = "ConfirmDim",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = Color3.new(0, 0, 0),
+	BackgroundTransparency = 1,
+	AutoButtonColor = false,
+	Text = "",
+	Visible = false,
+	ZIndex = 110,
+}, wc)
+
+-- ตัวกระจก: CanvasGroup เพื่อเฟดทั้งก้อนทีเดียว
+local glass = make("CanvasGroup", {
+	Name = "GlassConfirm",
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Size = UDim2.fromOffset(GLASS_W, GLASS_H),
+	BackgroundTransparency = 1,
+	GroupTransparency = 1,
+	Active = true, -- กันคลิปทะลุไปโดนฉากมืดข้างหลัง
+	Visible = false,
+	ZIndex = 50,
+}, gui)
+make("UICorner", { CornerRadius = UDim.new(0, 26) }, glass)
+local glassScale = make("UIScale", { Scale = 0.6 }, glass)
+
+-- เนื้อกระจก: ซ้ายบนขุ่นกว่า กลางใสกว่า (ยังทึบพอให้ข้อความด้านหลังไม่ทะลุมาทับ)
+local fill = make("Frame", {
+	Name = "Fill",
+	Position = UDim2.fromOffset(2, 2),
+	Size = UDim2.new(1, -4, 1, -4),
+	BackgroundColor3 = Color3.fromRGB(150, 178, 225),
+	BorderSizePixel = 0,
+}, glass)
+make("UICorner", { CornerRadius = UDim.new(0, 24) }, fill)
+make("UIGradient", {
+	Rotation = 35,
+	Transparency = seq({ { 0, 0.38 }, { 0.5, 0.58 }, { 1, 0.45 } }),
+}, fill)
+
+-- ขอบกระจก: สว่างที่มุมซ้ายบน/ขวาล่าง จางตรงกลาง
+local rim = make("UIStroke", {
+	Color = WHITE,
+	Thickness = 1.5,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, fill)
+make("UIGradient", {
+	Rotation = 45,
+	Transparency = seq({ { 0, 0.05 }, { 0.3, 0.75 }, { 0.7, 0.75 }, { 1, 0.1 } }),
+}, rim)
+
+-- แสงสะท้อนโค้งด้านบน
+local gloss = make("Frame", {
+	Name = "Gloss",
+	Position = UDim2.fromOffset(10, 6),
+	Size = UDim2.new(1, -20, 0, 40),
+	BackgroundColor3 = WHITE,
+	BorderSizePixel = 0,
+}, glass)
+make("UICorner", { CornerRadius = UDim.new(0, 20) }, gloss)
+make("UIGradient", {
+	Rotation = 90,
+	Transparency = seq({ { 0, 0.62 }, { 1, 1 } }),
+}, gloss)
+
+-- แสงวิ่งผ่านกระจกเป็นระยะ
+local shine = make("Frame", {
+	Name = "Shine",
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.new(0, -40, 0.5, 0),
+	Size = UDim2.fromOffset(46, GLASS_H * 2),
+	Rotation = 20,
+	BackgroundColor3 = WHITE,
+	BorderSizePixel = 0,
+}, glass)
+make("UIGradient", {
+	Transparency = seq({ { 0, 1 }, { 0.5, 0.74 }, { 1, 1 } }),
+}, shine)
+local shineTween = TweenService:Create(
+	shine,
+	TweenInfo.new(1.1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, false, 1.4),
+	{ Position = UDim2.new(0, GLASS_W + 40, 0.5, 0) }
+)
+
+-- ข้อความ
+local gTitle = make("TextLabel", {
+	Name = "Title",
+	Position = UDim2.fromOffset(16, 14),
+	Size = UDim2.new(1, -32, 0, 24),
+	BackgroundTransparency = 1,
+	Text = "ลบ Token Hub ออกไหม?",
+	TextColor3 = WHITE,
+	Font = Enum.Font.GothamBold,
+	TextSize = 17,
+}, glass)
+make("UIStroke", {
+	Color = Color3.new(0, 0, 0),
+	Thickness = 1,
+	Transparency = 0.6,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
+}, gTitle)
+
+local gSub = make("TextLabel", {
+	Name = "Sub",
+	Position = UDim2.fromOffset(16, 40),
+	Size = UDim2.new(1, -32, 0, 32),
+	BackgroundTransparency = 1,
+	Text = "UI นี้จะถูกลบทิ้งทั้งหมด\nกดยกเลิกเพื่อกลับไปใช้ต่อ",
+	TextColor3 = Color3.fromRGB(228, 236, 250),
+	Font = Enum.Font.GothamMedium,
+	TextSize = 12,
+	TextWrapped = true,
+}, glass)
+make("UIStroke", {
+	Color = Color3.new(0, 0, 0),
+	Thickness = 1,
+	Transparency = 0.7,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
+}, gSub)
+
+-- ปุ่มกระจก (เด้งเหมือนเจลลี่ตอน hover / กด)
+local function glassBtn(name, text, x, tint, tintTrans)
+	local b = make("TextButton", {
+		Name = name,
+		Position = UDim2.fromOffset(x, 84),
+		Size = UDim2.fromOffset(112, 36),
+		BackgroundColor3 = tint,
+		BackgroundTransparency = tintTrans,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = text,
+		TextColor3 = WHITE,
+		Font = Enum.Font.GothamBold,
+		TextSize = 14,
+	}, glass)
+	make("UICorner", { CornerRadius = UDim.new(1, 0) }, b)
+	make("UIStroke", {
+		Color = WHITE,
+		Thickness = 1.2,
+		Transparency = 0.35,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, b)
+	local s = make("UIScale", { Scale = 1 }, b)
+
+	local hoverTrans = math.max(tintTrans - 0.15, 0.1)
+	b.MouseEnter:Connect(function()
+		TweenService:Create(s, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1.07 }):Play()
+		TweenService:Create(b, tFade, { BackgroundTransparency = hoverTrans }):Play()
+	end)
+	b.MouseLeave:Connect(function()
+		TweenService:Create(s, TweenInfo.new(0.2, Enum.EasingStyle.Quad), { Scale = 1 }):Play()
+		TweenService:Create(b, tFade, { BackgroundTransparency = tintTrans }):Play()
+	end)
+	b.MouseButton1Down:Connect(function()
+		TweenService:Create(s, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Scale = 0.92 }):Play()
+	end)
+	b.MouseButton1Up:Connect(function()
+		TweenService:Create(s, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	end)
+	return b
+end
+
+local cancelBtn = glassBtn("Cancel", "ยกเลิก", 17, WHITE, 0.78)
+local removeBtn = glassBtn("Remove", "ลบออก", 141, Color3.fromRGB(255, 69, 69), 0.45)
+
+-- เบลอฉากหลังเกม (BlurEffect เบลอเฉพาะโลก 3D ไม่เบลอ UI)
+local blur = nil
+local function blurTo(size)
+	if GLASS_BLUR <= 0 then
+		return
+	end
+	if not blur then
+		if size == 0 then
+			return
+		end
+		blur = make("BlurEffect", { Name = "TokenHubBlur", Size = 0 }, Lighting)
+	end
+	local b = blur
+	local tw = TweenService:Create(b, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = size })
+	if size == 0 then
+		tw.Completed:Connect(function(playState)
+			if playState == Enum.PlaybackState.Completed and blur == b then
+				b:Destroy()
+				blur = nil
+			end
+		end)
+	end
+	tw:Play()
+end
+
+gui.Destroying:Connect(function()
+	if blur then
+		blur:Destroy()
+		blur = nil
+	end
+end)
+
+local confirmToken = 0
+
+local function glassPos(dy)
+	local c = win:center()
+	return UDim2.fromOffset(c.X, c.Y + (dy or 0))
+end
+
+-- ตอนลาก/ย่อจอ ให้กล่องตามหน้าต่าง
+onUiMoved = function()
+	if confirmOpen then
+		glass.Position = glassPos()
+	end
+end
+
+local function openConfirm()
+	if blocked() or state ~= "open" then
+		return
+	end
+	confirmOpen = true
+	confirmToken += 1
+
+	glass.Position = glassPos(16)
+	glass.GroupTransparency = 1
+	glassScale.Scale = 0.6
+	glass.Visible = true
+	confirmDim.BackgroundTransparency = 1
+	confirmDim.Visible = true
+
+	TweenService:Create(confirmDim, tFade, { BackgroundTransparency = 0.42 }):Play()
+	TweenService:Create(glassScale, tJelly, { Scale = 1 }):Play()
+	TweenService:Create(glass, tMove, { Position = glassPos(), GroupTransparency = 0 }):Play()
+
+	shine.Position = UDim2.new(0, -40, 0.5, 0)
+	shineTween:Play()
+	blurTo(GLASS_BLUR)
+end
+
+local function closeConfirm()
+	if not confirmOpen then
+		return
+	end
+	confirmOpen = false
+	confirmToken += 1
+	local mine = confirmToken
+
+	shineTween:Cancel()
+	TweenService:Create(glassScale, tOut, { Scale = 0.85 }):Play()
+
+	local f = TweenService:Create(glass, tOut, { GroupTransparency = 1 })
+	f.Completed:Connect(function()
+		if confirmToken == mine then
+			glass.Visible = false
+		end
+	end)
+	f:Play()
+
+	local d = TweenService:Create(confirmDim, tOut, { BackgroundTransparency = 1 })
+	d.Completed:Connect(function()
+		if confirmToken == mine then
+			confirmDim.Visible = false
+		end
+	end)
+	d:Play()
+
+	blurTo(0)
+end
+
+-- ลบออก: กล่องจางหาย -> หน้าต่างหดเป็นจุด -> ทำลาย UI
+local function removeAll()
+	if not confirmOpen then
+		return
+	end
+	confirmOpen = false
+	removing = true
+	confirmToken += 1
+
+	shineTween:Cancel()
+	TweenService:Create(glassScale, tOut, { Scale = 0.85 }):Play()
+	TweenService:Create(glass, tOut, { GroupTransparency = 1 }):Play()
+	TweenService:Create(confirmDim, tOut, { BackgroundTransparency = 1 }):Play()
+	blurTo(0)
+
+	task.wait(0.18)
+	win:hide(win:center())
+	task.wait(0.4)
+	gui:Destroy()
+end
+
+cancelBtn.Activated:Connect(closeConfirm)
+removeBtn.Activated:Connect(function()
+	task.spawn(removeAll)
+end)
+confirmDim.Activated:Connect(closeConfirm)
+
+closeBtn.Activated:Connect(openConfirm)
+
+conns[#conns + 1] = UIS.InputBegan:Connect(function(input, processed)
+	if processed or input.KeyCode ~= KEY or blocked() then
+		return
+	end
+	if state == "closed" then
+		openWin()
+	else
+		closeAll()
+	end
+end)
+
+conns[#conns + 1] = camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+	setPos(uiPos, curSize())
+end)
+
+-- ===== INTRO (~3 วิ) =====
+-- 0.00  จุดเล็ก ๆ ขอบ RGB เด้งขึ้นแล้วยืดเป็นแคปซูลยาว
+-- 0.60  พิมพ์ TOKEN HUB ทีละตัว
+-- 1.30  ชื่อสไลด์ไปขวา + กล่องไอคอนเด้ง -> เหรียญหมุนเร็วแล้วช้าลง -> ปุ่ม - และ X เด้ง
+-- 1.85  หน้าต่างคลี่ลงมา มุมค่อย ๆ จากแคปซูลเป็นเหลี่ยมมน ท้องฟ้ากับเนื้อหาโผล่ตามมา
+-- 3.00  เสร็จ ปลดล็อกปุ่ม
+local INTRO_TOTAL = 3.0
+local EASE_Q = Enum.EasingStyle.Quint
+local EASE_B = Enum.EasingStyle.Back
+local EASE_QUAD = Enum.EasingStyle.Quad
+local DIR_OUT = Enum.EasingDirection.Out
+
+local function ti(t, style)
+	return TweenInfo.new(t, style or EASE_Q, DIR_OUT)
+end
+
+local function tween(inst, info, goal)
+	TweenService:Create(inst, info, goal):Play()
+end
+
+local function playIntro()
+	introBusy = true
+	state = "open"
+	setPos(uiPos, WIN_SIZE)
+
+	local h = win.holder
+	local cx = uiPos.X + WIN_SIZE.X / 2
+	local capY = uiPos.Y + HEADER / 2 -- กลางแคปซูล
+	local fullY = uiPos.Y + WIN_SIZE.Y / 2 -- กลางหน้าต่างเต็ม (ขอบบนอยู่ที่เดิมตลอด)
+
+	-- เริ่มต้น: ซ่อนทุกอย่างไว้ก่อน เหลือแค่จุดขอบ RGB
+	win.token += 1
+	win.canvas.GroupTransparency = 1
+	win.scale.Scale = 0.3
+	win.stroke.Transparency = 1
+	for _, c in win.corners do
+		c.CornerRadius = UDim.new(0, HEADER / 2)
+	end
+	h.Size = UDim2.fromOffset(10, 10)
+	h.Position = UDim2.fromOffset(cx, capY)
+	h.Visible = true
+	dragHeader.Visible = false
+
+	introCover.BackgroundTransparency = 0
+	bodyCover.BackgroundTransparency = 0
+	iconPop.Scale = 0.01
+	coinPop.Scale = 0.01
+	minPop.Scale = 0.01
+	closePop.Scale = 0.01
+	spinBoost.Value = 1
+
+	local titleEnd = {}
+	for i, l in titleLabels do
+		titleEnd[i] = l.Position
+		l.Position = l.Position - UDim2.fromOffset(36, 0)
+		l.MaxVisibleGraphemes = 0
+	end
+
+	-- 0.00 จุด -> แคปซูล
+	tween(h, ti(0.55), { Size = UDim2.fromOffset(WIN_SIZE.X, HEADER) })
+	tween(win.scale, ti(0.5, EASE_B), { Scale = 1 })
+	tween(win.stroke, TweenInfo.new(0.15), { Transparency = 0 })
+	task.delay(0.35, function()
+		tween(win.canvas, ti(0.25, EASE_QUAD), { GroupTransparency = 0 })
+	end)
+
+	-- 0.60 พิมพ์ชื่อ
+	task.delay(0.6, function()
+		local total = utf8.len(titleLabels[1].Text) or 9
+		for i = 1, total do
+			for _, l in titleLabels do
+				l.MaxVisibleGraphemes = i
+			end
+			task.wait(0.075)
+		end
+		for _, l in titleLabels do
+			l.MaxVisibleGraphemes = -1
+		end
+	end)
+
+	-- 1.30 ชื่อสไลด์ไปขวา + กล่องไอคอนเด้ง
+	task.delay(1.3, function()
+		for i, l in titleLabels do
+			tween(l, ti(0.6), { Position = titleEnd[i] })
+		end
+		tween(iconPop, ti(0.45, EASE_B), { Scale = 1 })
+	end)
+	-- 1.55 เหรียญเด้ง หมุนเร็วแล้วค่อยช้าลง
+	task.delay(1.55, function()
+		tween(coinPop, ti(0.5, EASE_B), { Scale = 1 })
+		spinBoost.Value = 9
+		tween(spinBoost, TweenInfo.new(1.3, EASE_QUAD, DIR_OUT), { Value = 1 })
+	end)
+	-- 1.60 / 1.70 ปุ่ม - และ X เด้ง
+	task.delay(1.6, function()
+		tween(minPop, ti(0.35, EASE_B), { Scale = 1 })
+	end)
+	task.delay(1.7, function()
+		tween(closePop, ti(0.35, EASE_B), { Scale = 1 })
+	end)
+
+	-- 1.85 คลี่หน้าต่างลงมา (ขนาด + ตำแหน่งใช้ tween เดียวกัน ขอบบนเลยนิ่ง) + มุมโค้ง -> เหลี่ยมมน
+	task.delay(1.85, function()
+		tween(h, ti(0.85), {
+			Size = UDim2.fromOffset(WIN_SIZE.X, WIN_SIZE.Y),
+			Position = UDim2.fromOffset(cx, fullY),
+		})
+		for _, c in win.corners do
+			tween(c, ti(0.85), { CornerRadius = UDim.new(0, 8) })
+		end
+	end)
+	-- ท้องฟ้า / เนื้อหาค่อย ๆ โผล่
+	task.delay(1.95, function()
+		tween(introCover, ti(0.7, EASE_QUAD), { BackgroundTransparency = 1 })
+	end)
+	task.delay(2.15, function()
+		tween(bodyCover, ti(0.6, EASE_QUAD), { BackgroundTransparency = 1 })
+	end)
+
+	-- 3.00 เสร็จ
+	task.delay(INTRO_TOTAL, function()
+		h.Size = UDim2.fromOffset(WIN_SIZE.X, WIN_SIZE.Y)
+		h.Position = win:target()
+		for _, c in win.corners do
+			c.CornerRadius = UDim.new(0, 8)
+		end
+		for _, l in titleLabels do
+			l.MaxVisibleGraphemes = -1
+		end
+		introCover.Visible = false
+		bodyCover.Visible = false
+		dragHeader.Visible = true
+		introBusy = false
+	end)
+end
+
+-- ตัดทุก connection ที่ผูกกับ input / กล้อง ตอน UI ถูกลบ
+gui.Destroying:Connect(function()
+	for _, c in conns do
+		c:Disconnect()
+	end
+	table.clear(conns)
+end)
+
+-- เริ่ม: เปิดตรงกลางจอ
+setPos((camera.ViewportSize - WIN_SIZE) / 2, WIN_SIZE)
+task.spawn(playIntro)
